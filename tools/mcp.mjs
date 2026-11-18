@@ -24,7 +24,10 @@ export async function sessionRequest(root, route, { signal, data } = {}) {
   return result;
 }
 export function createMcp(root) {
-  const server = new Server({ name: 'chronicle-module', version: '0.1.0' }, { capabilities: { tools: { listChanged: true } } });
+  const server = new Server({ name: 'chronicle-module', version: '0.1.0' }, {
+    capabilities: { tools: { listChanged: true } },
+    instructions: 'Before acting, call whereami to observe the connected page. When advertised, call gen_page_context, then list_skill and read_skill for skills relevant to the task. This server/browser-supplied guidance is page-scoped; refresh it after navigation. Discover these tools dynamically rather than assuming they are available.',
+  });
   const controllers = new Set();
   // Only explicit client observations authorize calls, not background notifications.
   let observed;

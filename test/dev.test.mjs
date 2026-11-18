@@ -523,3 +523,59 @@ test('calls require observed page and capability, allowing repeated same-revisio
   await request('browser', { method: 'POST', data: { clientId: 'browser-1', page: moved, tools: revisedTools } });
   assert.equal((await call(current)).status, 409);
 });
+
+test('official stdio exposes initialization guidance and forwards dynamic page skills verbatim', async t => {
+  const root = await fixture(t);
+  const mcpUrl = new URL('../tools/mcp.mjs', import.meta.url).href;
+  const transport = new StdioClientTransport({ command: process.execPath, args: ['--input-type=module', '-e', `import { runMcp } from ${JSON.stringify(mcpUrl)}; await runMcp(process.argv[1], { port: 0 });`, root], stderr: 'pipe' });
+  const client = new Client({ name: 'page-guidance-test', version: '1' });
+  t.after(() => client.close());
+  await client.connect(transport);
+  const instructions = client.getInstructions();
+  assert.match(instructions, /whereami.*gen_page_context.*list_skill.*read_skill/);
+  assert.match(instructions, /When advertised/);
+  assert.match(instructions, /server\/browser-supplied guidance is page-scoped/);
+  assert.deepEqual((await client.listTools()).tools.map(tool => tool.name), ['whereami']);
+
+  const session = JSON.parse(await readFile(path.join(root, '.chronicle/dev.json')));
+  const request = (route, data) => fetch(`http://127.0.0.1:${session.port}/v1/${route}`, {
+    method: data ? 'POST' : 'GET', headers: { Authorization: `Bearer ${session.token}` }, body: data ? JSON.stringify(data) : undefined,
+  });
+  const catalog = ['gen_page_context', 'list_skill', 'read_skill'].map(name => ({
+    name,
+    description: `Browser supplied description for ${name}`,
+    inputSchema: {
+      type: 'object',
+      properties: name === 'read_skill' ? { skill_id: { type: 'string', description: 'Page-scoped skill identifier', minLength: 1 } } : {},
+      ...(name === 'read_skill' ? { required: ['skill_id'] } : {}),
+      additionalProperties: false,
+    },
+    capability: { id: 'page-guidance', version: 1, scopeType: 'page', scopeId: page.url },
+    effect: 'read', confirmation: 'never',
+  }));
+  const heartbeat = result => request('browser', { clientId: 'guidance-tab', page, tools: catalog, ...(result ? { result } : {}) });
+  assert.equal((await heartbeat()).status, 200);
+  const whereami = await client.callTool({ name: 'whereami' });
+  assert.deepEqual(JSON.parse(whereami.content[0].text).page, page);
+  assert.deepEqual((await client.listTools()).tools.slice(1), catalog.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })));
+  const results = [
+    { page: page.url, guidance: 'Use the current browser selection.' },
+    { skills: [{ id: 'lua-editing', description: 'Edit this page safely' }] },
+    { skill_id: 'lua-editing', content: '# Browser-owned skill\nRead the working copy before editing.' },
+  ];
+  for (const [index, tool] of catalog.entries()) {
+    const args = tool.name === 'read_skill' ? { skill_id: 'lua-editing' } : {};
+    const pending = client.callTool({ name: tool.name, arguments: args });
+    const command = await eventually(async () => (await (await request('state')).json()).commands[0]);
+    assert.equal(command.toolName, tool.name);
+    assert.deepEqual(command.arguments, args);
+    assert.deepEqual(command.capability, tool.capability);
+    const result = { status: 'success', result: results[index] };
+    assert.equal((await heartbeat({ ...command, result })).status, 200);
+    const response = await pending;
+    assert.equal(response.isError, undefined);
+    assert.deepEqual(JSON.parse(response.content[0].text), result);
+  }
+  assert.equal((await request('browser', { clientId: 'guidance-tab', page, tools: [] })).status, 200);
+  assert.deepEqual((await client.listTools()).tools.map(tool => tool.name), ['whereami']);
+});
