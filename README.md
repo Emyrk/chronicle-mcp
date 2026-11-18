@@ -1,17 +1,76 @@
-# Chronicle local module
+<p align="center">
+  <a href="https://chronicleclassic.com/?utm_source=github&amp;utm_medium=referral&amp;utm_campaign=readme&amp;utm_id=chronicle_mcp&amp;utm_content=logo">
+    <img src="https://raw.githubusercontent.com/Emyrk/chronicle/main/frontend/chronicle/public/c/chronicle/ChronicleLogoCenter.svg" alt="Chronicle" width="320" />
+  </a>
+</p>
 
-A generic stdio MCP relay for Chronicle's browser-owned working copy. Requires
-Node.js 22 or newer. No build step. The project name is unchanged.
+<h3 align="center">Chronicle MCP — your agent, connected to your browser</h3>
 
 ## Quick start
 
-1. Run `npm install` in this directory.
-2. Configure your MCP client as below. The MCP process starts its own loopback
-   webserver. Do not start a separate dev server.
-3. Open your normal Chronicle module editor and explicitly connect the local
-   browser tools. Approve browser localhost/local-network access if prompted.
-4. Ask your MCP client for `whereami`, then use the tools the connected page
-   advertises, such as `read_lua_files`, `save_lua_files`, or `run_preview`.
+Requires **Node.js 22+**, an MCP-compatible client such as Xum, and a Chronicle deployment with the browser-tool bridge. No build step or local Lua files required.
+
+### 1. Install
+
+```sh
+git clone https://github.com/Emyrk/chronicle-mcp.git
+cd chronicle-mcp
+npm install
+```
+
+### 2. Add the MCP server to your client
+
+Replace `/absolute/path/chronicle-mcp` with your checkout path:
+
+```json
+{
+  "mcpServers": {
+    "chronicle-mcp": {
+      "command": "node",
+      "args": [
+        "/absolute/path/chronicle-mcp/tools/cli.mjs",
+        "mcp",
+        "--root",
+        "/absolute/path/chronicle-mcp"
+      ]
+    }
+  }
+}
+```
+
+In Xum, add the command and arguments under **Settings → MCP**, then connect.
+Use `node` directly, not `npm run mcp`: npm writes extra text to the stdio channel.
+The MCP process starts its own loopback server—**do not start a separate dev server**.
+
+**Using Vite on `http://localhost:5173`?** Append `"--origin", "http://localhost:5173"` to `args`, then restart the MCP connection. For another deployment, pass its exact origin instead. The defaults allow `https://chronicleclassic.com` and `http://localhost:4000`.
+
+### 3. Connect your browser tab
+
+Open a module edit page and click **Connect to local MCP**. Approve browser local-network access if prompted. Your account needs Chronicle's inference-chat permission; a model-provider connection is not required.
+
+Ask your agent to call `whereami`, then read or edit the module and run a preview. Select an instance and encounters in the Preview pane first. Changes stay in the browser working copy; saving requires browser approval and does not publish a release.
+
+| Tool | What it does |
+| --- | --- |
+| `whereami` | Reports the connected page URL and connection state. |
+| `read_lua_files` | Reads the browser working copy and revision. |
+| `edit_lua_file` | Edits a module file with a revision check. |
+| `run_startup_check` | Checks Lua startup in the browser worker. |
+| `run_preview` | Replays the module against selected encounters. |
+| `save_lua_files` | Requests approval to save the working copy to main. |
+
+The page supplies its own tools; only `whereami` is available before a tab connects.
+
+The MCP initialization instructions guide the agent to call `whereami`, then
+`gen_page_context` when advertised, followed by `list_skill` and `read_skill`
+for relevant skills before acting. This server/browser-supplied guidance is
+page-scoped; refresh it after navigation. These are dynamic browser tools, not
+locally bundled skill content or fixed relay schemas.
+
+> [!NOTE]
+> One MCP process and one browser tab can use the relay at a time. Port **17643** must be free. Shared use across multiple MCP processes is not implemented yet.
+
+## How it works
 
 The browser owns all source files and edits. MCP does not read module files,
 package ZIPs, hash sources, or watch the filesystem. The browser exposes shared
@@ -24,22 +83,7 @@ changes the page generation or session, immediately invalidating pending calls,
 even if the URL stays the same. Closing the tab expires the lease and fails
 outstanding calls. A late result is ignored without disconnecting the tab.
 
-## MCP configuration
-
-Use an absolute script path. Do not use `npm run mcp` as the stdio command because
-npm prints chatter to stdout.
-
-```json
-{
-  "mcpServers": {
-    "chronicle-module": {
-      "command": "node",
-      "args": ["/absolute/path/chronicle-module/tools/cli.mjs", "mcp"],
-      "cwd": "/any/writable/directory"
-    }
-  }
-}
-```
+## Configuration and lifecycle
 
 `--root` optionally chooses the private session-file directory, defaulting to
 cwd. No `project.json`, Lua source, or other module files are required.
