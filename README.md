@@ -1,125 +1,150 @@
 # Chronicle local module
 
-A Lua panel starter with a loopback development server and a stdio MCP bridge.
-Requires Node.js 22 or newer. No build step.
+A generic stdio MCP relay for Chronicle's browser-owned working copy. Requires
+Node.js 22 or newer. No build step. The project name is unchanged.
 
-## Start
+## Quick start
 
-```sh
-npm install
-npm run dev
-# Use your existing module editor URL to print the usable pairing link:
-npm run dev -- --url 'https://chronicleclassic.com/modules/your-author/your-slug/edit'
-# UUID routes also work: https://chronicleclassic.com/modules/id/<uuid>/edit
-# Optional: --origin https://chronicleclassic.com (must match --url exactly)
-# For another working directory:
-node /absolute/path/chronicle-module/tools/cli.mjs dev --root /absolute/path/chronicle-module
-```
+1. Run `npm install` in this directory.
+2. Configure your MCP client as below. The MCP process starts its own loopback
+   webserver. Do not start a separate dev server.
+3. Open your normal Chronicle module editor and explicitly connect the local
+   browser tools. Approve browser localhost/local-network access if prompted.
+4. Ask your MCP client for `whereami`, then use the tools the connected page
+   advertises, such as `read_lua_files`, `save_lua_files`, or `run_preview`.
 
-Without `--url`, the server prints instructions, not an unusable root link.
-Origin defaults to `https://chronicleclassic.com`; supplying `--url` infers its
-origin unless you explicitly supply `--origin`. Pairing UI exists only on module
-editor routes, not `/modules` or a generic `/workshop` page.
+The browser owns all source files and edits. MCP does not read module files,
+package ZIPs, hash sources, or watch the filesystem. The browser exposes shared
+Chronicle-defined tool contracts and validates inputs through Chronicle's tool
+endpoint. Mutations and confirmation policy remain browser responsibilities.
+The relay cannot override a tool's effect or confirmation policy.
 
-Open the printed pairing link in your Chronicle browser and explicitly approve
-local access. The token is a private credential carried in the URL fragment,
-not a query parameter. Do not share the link. Restarting the server rotates it.
-Only one browser tab can own the lease. Heartbeats renew it for 10 seconds.
-Closing the browser expires the lease and fails outstanding previews.
-
-**Chronicle deployment integration is required.** This repository alone does not
-add the browser pairing/preview UI to a deployed Chronicle site. The deployment
-must allow `http://127.0.0.1:17643` in its `connect-src` CSP and implement this
-protocol. Browser localhost/local-network permission may need explicit approval.
-CORS and Private Network Access preflight responses cannot override browser or
-enterprise security policy. There is no remote tunnel or public listener.
-
-Edit `main.lua`. The starter sums encounter damage into a metric. `project.json`
-is the manifest; its `entrypoint` must name an included Lua file. Add relative
-PNG, JPEG, or WebP paths to `assets` to include images. LuaLS uses the copied
-Chronicle API declarations in `lua-types/`; refresh that copy when the host API
-changes. The declarations are editor support only, not runtime package files.
+Only one tab owns the lease, renewed by heartbeats for 10 seconds. Navigation
+changes the page generation or session, immediately invalidating pending calls,
+even if the URL stays the same. Closing the tab expires the lease and fails
+outstanding calls. A late result is ignored without disconnecting the tab.
 
 ## MCP configuration
 
-Configure a generic MCP client with an absolute executable script path. Do not
-use `npm run mcp` as the stdio command because npm prints chatter to stdout.
+Use an absolute script path. Do not use `npm run mcp` as the stdio command because
+npm prints chatter to stdout.
 
 ```json
 {
   "mcpServers": {
     "chronicle-module": {
       "command": "node",
-      "args": ["/absolute/path/chronicle-module/tools/cli.mjs", "mcp", "--root", "/absolute/path/chronicle-module"],
-      "cwd": "/absolute/path/chronicle-module"
+      "args": ["/absolute/path/chronicle-module/tools/cli.mjs", "mcp"],
+      "cwd": "/any/writable/directory"
     }
   }
 }
 ```
 
-Start the dev server separately first. `preview` snapshots the current package,
-asks the paired browser to execute that revision, and returns its result plus
-source `revision`. `status` reports validation errors, revision, and connected
-browser context (`instanceId`, `encounterIds`). Preview waits at most 60 seconds;
-the HTTP client allows 65 seconds for transport overhead. A canceled/disconnected
-MCP request cancels its pending command. Only one preview may be pending.
+`--root` optionally chooses the private session-file directory, defaulting to
+cwd. No `project.json`, Lua source, or other module files are required.
+`--origin https://example.com` approves an additional exact browser origin.
+`--port 0` selects an ephemeral port for integration tests; the normal browser
+integration uses port 17643. Both npm and pnpm option separators are supported.
 
-## Package and safety limits
+MCP owns the listener. It fails clearly if the port is occupied, never attaches
+to another process, and never stops the existing listener. Client disconnect,
+stdin closure, SIGINT, and SIGTERM cancel pending calls, release the listener,
+and remove this process's session file.
 
-Each poll rebuilds a deterministic, sorted, uncompressed ZIP with fixed DOS
-1980-01-01 timestamps. The revision is SHA-256 of those exact ZIP bytes.
-Includes `project.json`, optional `README.md`, all `.lua` sources outside ignored
-directories, and declared raster assets. Excludes hidden entries, `node_modules`,
-`tools`, `test`, `tests`, `dist`, `build`, `coverage`, `vendor`, and `lua-types`.
-Symlinks outside ignored directories, path traversal, absolute paths, and
-backslashes are rejected. Keep generated sources outside the package tree.
-Limits: 128 files, 1 MiB per file, 4 MiB total uncompressed content, and 4096
-scanned directory entries. This is a development snapshotter, not a sandbox for
-concurrent hostile filesystem mutations. Do not let untrusted processes modify
-the module directory while serving it. Lua runtime safety remains the host's job.
+`tools/list` returns `whereami` plus the connected browser's tool names,
+descriptions, and JSON input schemas unchanged. Without a browser it returns
+only `whereami`. Catalog, page generation/session changes, and lease expiry
+emit `notifications/tools/list_changed`.
 
-Invalid files produce an empty archive and an `error` field. Their revision is a
-hash of the error message. A pending preview is retired when state polling sees
-a different revision. The browser must also compare every command's revision
-with its current state before execution and reject changes with
-`{ "ok": false, "error": "Source changed; retry preview" }`. It must not execute a
-command twice across repeated polls. Results belong to the pinned revision even
-if a later edit occurs after execution.
+`whereami` returns `{page:null|{url,generation,sessionId},connected}` using the
+latest heartbeat URL. URL fragments are stripped. Browser tool calls return the
+browser's JSON continuation unchanged in MCP text content. A continuation whose
+`status` is not `success` (including rejection, stale state, and client errors)
+is an MCP `isError` result. HTTP failures also become `isError`; `stale_page`
+becomes `{status:"stale_state",result:{message:"Page changed"}}`.
 
-## HTTP protocol 1
+Tool calls also pin the client's last explicit observation. `tools/list` and
+`whereami` record the page generation/session and each capability. Notifications
+do not refresh this observation. A delayed call after navigation or capability
+revision changes fails stale rather than silently targeting the new page. Call
+`whereami` or list tools again to observe the current page and resume. Clients
+must first observe connected tools before calling them. Canonical tool input
+schemas remain unchanged; observation metadata travels only inside the relay.
+Repeated calls with unchanged page/capability revisions remain valid.
 
-Fixed listener: `http://127.0.0.1:17643`, bound only to IPv4 loopback. Every API
-request requires `Authorization: Bearer <token>`. `Host` must be exactly
-`127.0.0.1:17643`. Browser `Origin` must equal the configured origin, including
-scheme and port. Origin-less local MCP requests still need the token. The only
-unauthenticated response is an approved-origin OPTIONS preflight with no state;
-it allows Authorization, Content-Type, X-Chronicle-Client, and Private Network
-Access. Browser permissions remain separate from explicit Chronicle approval.
+One call may be pending. It times out after 60 seconds (the local HTTP client
+allows 65 seconds). Canceling an MCP call removes its pending browser command.
 
-- `POST /v1/browser`: `{clientId, context:{instanceId,encounterIds}, result?}`.
-  Send a heartbeat **before** fetching state and continue while preview runs.
-  A competing active client receives 409. Optional result is
-  `{id,revision,result:<JSON value>}`. Unknown/expired IDs or wrong revisions
-  are ignored with `{ok:true,resultAccepted:false}` so a raced result never
-  disconnects an otherwise valid heartbeat. Matched results acknowledge
-  `{ok:true,resultAccepted:true}`. Complete JSON request bodies must be smaller than 128 KiB.
-- `GET /v1/state`: `{protocol:1,revision,archive,error?,commands:[{id,type:"preview",revision}]}`.
-  `archive` is base64 ZIP. Browser requests require `X-Chronicle-Client` matching
-  the active lease; local authenticated clients do not need that header.
-- `POST /v1/preview`: `{}`. Holds the response until a matching browser result;
-  success is `{id,revision,result}`. No browser: 409; invalid module: 422;
-  concurrent preview/source changes/disconnect: 409; timeout: 504; shutdown: 503.
-- `GET /v1/status`: `{protocol:1,revision,error?,browser:null|{clientId,context},pending}`.
+## Deployment and security
 
-The ignored `.chronicle/dev.json` contains `{port:17643,token}`, written with
-0600 permissions. Dev logs go to stderr. The MCP process reserves stdout for
-the official `@modelcontextprotocol/sdk` stdio transport.
+Chronicle deployment integration is required. The site must implement protocol 2
+and allow `http://127.0.0.1:17643` in its `connect-src` CSP. CORS and Private
+Network Access preflight responses do not override browser or enterprise policy.
+There is no remote tunnel or public listener.
+
+The listener binds only IPv4 loopback. `Host` must exactly match
+`127.0.0.1:<port>`. Approved origins always include
+`https://chronicleclassic.com` and `http://localhost:4000`, plus `--origin`.
+Scheme and port must match exactly; wildcards and trailing slashes are rejected.
+All routes reject unapproved Origins. All routes require bearer authentication
+except approved-origin bootstrap and OPTIONS. Origin-less local requests still
+require bearer authentication.
+
+The private `.chronicle/dev.json` contains `{port,token}`, with mode 0600. It is
+internal relay state, not a user setup step. Restarting rotates the token. Keep
+it private. Logs go to stderr; stdout belongs exclusively to official MCP stdio.
+Approved sites can bootstrap the token and are trusted.
+
+## HTTP protocol 2
+
+- `POST /v1/connect`: `{protocol:2}` returns `{protocol:2,token}`. Requires an
+  approved Origin, not a bearer token. Does not claim the tab lease.
+- `POST /v1/browser`: `{clientId,page:{url,generation,sessionId},tools,result?}`.
+  Claims/renews the single-tab lease. A competing client receives 409. The page
+  URL must be HTTP(S), have an approved exact origin, and match the request's
+  Origin when present. Send origin + pathname + search, without hash.
+  Each tool is `{name,description,inputSchema,capability,effect,confirmation}`.
+  Capability is `{id,version,scopeType?,scopeId?,stateRevision?}`; version is a
+  positive integer, stateRevision a nonnegative integer. `effect` is `read` or
+  `view_mutation`; `confirmation` is `never` or `unless_yolo`.
+  Schemas are JSON objects with `type:"object"`. Names are unique, at most 128
+  characters using letters, digits, `_`, `.`, `-`; `whereami` and `status` are
+  reserved. Maximum 64 tools, 128 KiB complete heartbeat/catalog body, 64 KiB
+  serialized result value. Optional result is `{id,generation,result:<JSON>}`.
+  Unknown IDs or stale generations acknowledge `{ok:true,resultAccepted:false}`.
+- `GET /v1/state`: `{protocol:2,commands:[{id,type:"tool",generation,toolName,
+  arguments,capability}]}`. No ZIP or source revision. Browser requests require
+  `X-Chronicle-Client` matching the active lease. Commands pin the tool capability
+  and page generation/session at call time. The browser must deduplicate command
+  IDs and recheck the pinned capability before execution.
+- `POST /v1/call`: `{name,arguments:<object>,page:{generation,sessionId},capability}`
+  includes the last explicitly observed page and capability. Missing or mismatched
+  observation returns 409 `stale_page` before enqueueing. Holds HTTP until the browser returns
+  `{id,generation,result}`. Unknown tool: 404; no browser or concurrent call: 409;
+  page generation/session change: 409 `stale_page`; timeout: 504; shutdown: 503.
+  Complete request bodies are bounded to 128 KiB. Inputs receive full validation
+  in the browser, not via a lossy reconstruction of schemas in the relay.
+- `GET /v1/status`: `{protocol:2,page:null|page,tools:[],connected,pending}`.
+
+Preflight permits Authorization, Content-Type, X-Chronicle-Client, and Private
+Network Access. Continue heartbeats while a tool executes, before polling state.
+
+## Deprecated standalone dev command
+
+`npm run dev` starts only the same browser-tool relay without MCP. It does not
+serve a local package. Do not run it alongside MCP on the same port. For legacy
+pairing links, `--url <editor-url>` infers its origin unless `--origin` is supplied;
+the two must match. The printed fragment token is private. Normal bootstrap
+requires no copied token. Stop the standalone server with Ctrl+C.
+
+The Lua starter, `project.json`, `lua-types/`, and legacy package helper remain
+for compatibility, but are not part of the MCP flow.
 
 ## Tests
 
-```sh
-npm test
-```
-
-Tests use temporary module directories and actual loopback HTTP requests, plus
-the official MCP client over stdio. They do not require Chronicle deployment.
+Run `npm test`. Tests use ephemeral loopback ports and temporary directories,
+including a directory with no module files. They cover authentication, schemas,
+bounds, real official MCP stdio, dynamic notifications, navigation invalidation,
+late results, cancellation, lifecycle cleanup, and legacy packaging helpers.
+They never use or stop an existing listener on port 17643.
