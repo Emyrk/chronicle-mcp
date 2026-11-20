@@ -64,7 +64,7 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	fs := flag.NewFlagSet(command, flag.ContinueOnError)
 	fs.SetOutput(errOut)
 	fs.IntVar(&o.port, "port", 17643, "loopback listener port (0 selects an ephemeral port)")
-	fs.StringVar(&o.dir, "state-dir", filepath.Join(base, "chronicle"), "private state directory")
+	fs.StringVar(&o.dir, "state-dir", filepath.Join(base, "chronicle-mcp"), "private state directory")
 	fs.StringVar(&o.origin, "origin", "https://chronicleclassic.com", "allowed browser origin")
 	fs.DurationVar(&o.idle, "idle-timeout", 6*time.Hour, "idle shutdown timeout (0 disables)")
 	fs.DurationVar(&o.lease, "agent-lease", 5*time.Minute, "agent lease duration")

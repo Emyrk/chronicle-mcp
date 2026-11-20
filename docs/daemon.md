@@ -27,7 +27,7 @@ No release binaries are provided by this change.
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `--port` | `17643` | IPv4 loopback port; `0` selects an ephemeral port for tests |
-| `--state-dir` | OS user config directory + `/chronicle` | Private shared state directory |
+| `--state-dir` | OS user config directory + `/chronicle-mcp` | Private shared state directory |
 | `--origin` | `https://chronicleclassic.com` | One additional exact browser origin |
 | `--idle-timeout` | `6h` | Agent inactivity shutdown; `0` disables |
 | `--agent-lease` | `5m` | Inactive agent session retention, positive and at most `24h` |
@@ -36,8 +36,8 @@ No release binaries are provided by this change.
 The defaults always allow browser origins `https://chronicleclassic.com` and
 `http://localhost:4000`. Wildcards, paths, and trailing slashes are invalid.
 Use the same `--state-dir` on all commands when overriding it. On Linux, the
-default respects `XDG_CONFIG_HOME`, otherwise `$HOME/.config/chronicle`. On macOS
-it is `$HOME/Library/Application Support/chronicle`.
+default respects `XDG_CONFIG_HOME`, otherwise `$HOME/.config/chronicle-mcp`. On macOS
+it is `$HOME/Library/Application Support/chronicle-mcp`.
 
 The directory is mode 0700 and `dev.json` is mode 0600. It contains separate
 browser and agent bearer tokens, listener port, version, and configuration.

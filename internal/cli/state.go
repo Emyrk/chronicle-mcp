@@ -59,7 +59,7 @@ func privateDir(dir string, create bool) error {
 		return errors.New("state path is not a directory")
 	}
 	if info.Mode().Perm()&0077 != 0 {
-		return errors.New("state directory must have mode 0700")
+		return fmt.Errorf("state directory %q must have mode 0700", dir)
 	}
 	return nil
 }

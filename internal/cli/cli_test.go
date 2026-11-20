@@ -31,6 +31,40 @@ func TestMain(m *testing.M) {
 func fixture() state {
 	return state{Port: 17643, Token: "browser-secret", AgentToken: "agent-secret", Version: relay.Version, Origin: "https://chronicleclassic.com", IdleTimeout: 6 * time.Hour, AgentLease: 5 * time.Minute}
 }
+func TestDefaultStateDirectory(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("default config paths tested on supported installer platforms")
+	}
+	root := t.TempDir()
+	t.Setenv("HOME", root)
+	t.Setenv("XDG_CONFIG_HOME", root)
+	base, err := os.UserConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(base, "chronicle-mcp")
+	if err := writeState(dir, fixture()); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := Run(context.Background(), []string{"auth", "headers"}, &out, io.Discard); err != nil {
+		t.Fatalf("default state lookup failed: %v", err)
+	}
+	var headers map[string]string
+	if err := json.Unmarshal(out.Bytes(), &headers); err != nil || headers["Authorization"] != "Bearer "+fixture().AgentToken {
+		t.Fatal("default state lookup did not use chronicle-mcp credentials")
+	}
+	if _, err := os.Stat(filepath.Join(base, "chronicle")); !os.IsNotExist(err) {
+		t.Fatal("default lookup touched the unrelated chronicle directory")
+	}
+	if err := os.Chmod(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := privateDir(dir, false); err == nil || !strings.Contains(err.Error(), dir) {
+		t.Fatal("permission error must identify the state directory")
+	}
+}
+
 func TestPrivateState(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "state")
 	s := fixture()
