@@ -40,8 +40,8 @@ type health struct {
 
 // Run never writes credentials except for the explicit auth headers command.
 func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
-	if len(args) == 0 {
-		return errors.New("usage: chronicle-mcp serve|start|status|stop|auth headers [flags]")
+	if requested, topic := helpRequest(args); requested {
+		return printHelp(out, topic)
 	}
 	command := args[0]
 	args = args[1:]
@@ -71,7 +71,11 @@ func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	if command == "stop" {
 		fs.BoolVar(&o.force, "force", false, "stop even with active agents or pending calls")
 	}
+	fs.Usage = func() { _ = printHelp(out, command) }
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 	if fs.NArg() != 0 {

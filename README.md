@@ -102,6 +102,7 @@ browser or discard those edits. Tray and browser ownership UI are follow-ups.
 ## Headless service and other MCP clients
 
 ```sh
+chronicle-mcp --help   # list commands; use help <command> for flags
 chronicle-mcp serve    # foreground, suitable for a service manager
 chronicle-mcp start    # detached; reuse only a compatible existing daemon
 chronicle-mcp status   # inspect state without exposing credentials
