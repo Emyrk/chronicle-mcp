@@ -37,3 +37,19 @@ production metadata, and never start or stop the user's service.
 `auth headers`, which prints secret JSON for MCP consumption, not chat. No command
 except `start` downloads an executable. The helper runs on each MCP connection;
 the installed executable's hash is verified again before use.
+
+## GitHub-attested download dependency
+
+The selected release-download direction requires GitHub CLI (`gh`) with
+`gh attestation verify` support. This authenticates release artifacts against
+our trusted GitHub repository and release workflow without managing a long-lived
+signing key. Attestation verification is not yet implemented in `chronicle.sh`;
+the pinned SHA256 behavior above remains the actual installer behavior.
+
+The setup skill checks for the verifier and asks the user for permission before
+installing a missing CLI or upgrading an unsupported version. It explains the
+secure-download purpose and proposes a trusted package-manager installation,
+including any required privileges. Refusal blocks release setup, not a fallback
+to unverified downloads. Approved local development binaries need no verifier.
+Future download methods must retain verification and explicit dependency-install
+consent rather than silently downloading their own verifier.

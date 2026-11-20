@@ -8,7 +8,39 @@ disable-model-invocation: true
 
 Explain that this installs a pinned executable in persistent plugin data and
 starts or reuses a shared per-user background daemon on loopback port 17643.
-It is not an automatic hook. Ask for normal command approval before running:
+It is not an automatic hook.
+
+## Secure-download dependency
+
+For release installation, check `command -v gh` and `gh attestation verify --help`
+before starting setup. GitHub CLI (`gh`) is the required verifier for the
+GitHub-attested download method; it authenticates downloads against the trusted
+repository and release workflow, rather than trusting a downloaded checksum alone.
+
+If `gh` is missing, ask the user before downloading or installing it:
+
+> Chronicle needs GitHub CLI (`gh`) for secure downloads: it verifies that release
+> binaries were built by Chronicle's trusted GitHub Actions workflow. May I
+> install it using your system's trusted package manager?
+
+Show the proposed installation command and any elevated privileges before
+requesting approval. Use the platform's trusted package manager or the official
+GitHub CLI installation instructions at https://cli.github.com/. Never silently
+install or upgrade `gh`, run an unverified bootstrap download, or bypass
+verification. If the installed CLI lacks attestation support, ask permission to
+upgrade it instead. If permission is declined, stop release setup and explain
+the dependency. After installation, recheck that attestation verification is
+available. Do not request or print authentication tokens in chat.
+
+Implementation status: the installer still uses pinned SHA256 metadata;
+GitHub-attested downloads are not implemented yet. Having `gh` installed does
+not make the existing installer attestation-verified. Do not claim otherwise.
+The explicitly approved `CHRONICLE_DEV_BINARY` path does not need `gh` and is
+not a secure release download.
+
+## Start the daemon
+
+Ask for normal command approval before running:
 
 ```sh
 sh "${CLAUDE_PLUGIN_ROOT}/scripts/chronicle.sh" start

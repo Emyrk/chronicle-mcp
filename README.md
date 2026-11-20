@@ -29,6 +29,16 @@ install or start anything automatically.
 
 ### 2. Set up the shared daemon
 
+**Secure-download prerequisite:** GitHub CLI (`gh`) with `gh attestation verify`
+support is required for the planned GitHub-attested release download method.
+The setup agent must ask your permission before installing or upgrading it,
+explain that it verifies release authenticity for security, and use a trusted
+package-manager installation. Declining leaves release setup blocked; it must
+not fall back to unverified downloads. See [GitHub CLI installation](https://cli.github.com/).
+The current installer still uses pinned SHA256 metadata; attestation-based
+downloads are not implemented yet. Explicit local development builds do not
+require `gh`.
+
 Run `/chronicle:setup` and approve the setup command. The installer downloads only
 the version pinned in `scripts/release.tsv`, verifies its bundled SHA256, and
 stores the executable in `${CLAUDE_PLUGIN_DATA}/bin/<version>/chronicle-mcp`. It checks
