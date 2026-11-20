@@ -268,6 +268,17 @@ func start(ctx context.Context, o options, out io.Writer) error {
 				message := "Chronicle already running on port %d\n"
 				if s.PID == cmd.Process.Pid {
 					message = "Chronicle started on port %d\n"
+				} else if !childExited {
+					// Our contender must finish before reporting reuse. Otherwise a
+					// slow-spawning child can acquire the lock after the winner is
+					// explicitly stopped, unexpectedly starting a replacement daemon.
+					select {
+					case <-done:
+					case <-ctx.Done():
+						return ctx.Err()
+					case <-deadline.C:
+						return errors.New("daemon contender did not exit before startup timeout")
+					}
 				}
 				_, err = fmt.Fprintf(out, message, s.Port)
 				return err
