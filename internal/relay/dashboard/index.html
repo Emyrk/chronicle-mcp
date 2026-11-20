@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Chronicle MCP · Local dashboard</title>
+<link rel="stylesheet" href="/dashboard/style.css">
+<script src="/dashboard/app.js" defer></script>
+</head>
+<body>
+<main>
+<header><div><p class="eyebrow">LOCAL LOOPBACK SERVICE</p><h1>Chronicle MCP</h1></div><span id="state" class="badge">Connecting</span></header>
+<p class="intro">Inspect connected browser tabs and release agent control. This dashboard is local and has no login. Browser edits and save approval stay in Chronicle.</p>
+<section aria-labelledby="service-heading"><h2 id="service-heading">Service</h2><dl id="service"></dl></section>
+<section aria-labelledby="connections-heading"><div class="section-heading"><h2 id="connections-heading">Browser connections</h2><button id="refresh" type="button">Refresh</button></div><p id="empty">Waiting for service status…</p><div id="connections"></div></section>
+<section class="danger"><h2>Stop local service</h2><p>Disconnects all agents and cancels pending work. This does not save or discard browser edits. A mutation already running in the browser may not be reversible.</p><button id="shutdown" type="button" disabled>Shut down daemon…</button></section>
+<p id="message" role="status" aria-live="polite"></p>
+<dialog id="confirmation"><form method="dialog"><h2 id="confirm-title">Confirm action</h2><p id="confirm-detail"></p><div class="actions"><button value="cancel" autofocus>Cancel</button><button id="confirm-action" value="confirm">Confirm</button></div></form></dialog>
+<footer>Only accessible on this machine at the exact IPv4 loopback address.</footer>
+</main>
+</body>
+</html>

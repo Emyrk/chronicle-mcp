@@ -664,7 +664,7 @@ func TestAgentGETLeaseAndSafeStatus(t *testing.T) {
 	a := client(t, d, s, nil)
 	selectTab(t, a, tab.id, true)
 	code, status := request(t, s, d.AgentToken, "", "GET", "/health", "", nil)
-	if code != 200 || status["protocol"] != float64(3) || status["version"] != "0.2.0" {
+	if code != 200 || status["protocol"] != float64(3) || status["version"] != Version {
 		t.Fatal(status)
 	}
 	connection := status["connections"].([]any)[0].(map[string]any)
