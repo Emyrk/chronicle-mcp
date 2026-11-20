@@ -143,7 +143,11 @@ func TestHealthIdentityAndShutdown(t *testing.T) {
 					return
 				}
 				w.WriteHeader(tc.status)
-				_ = json.NewEncoder(w).Encode(health{Service: tc.service, Version: tc.version, Protocol: tc.protocol, Origin: s.Origin, IdleTimeout: s.IdleTimeout.String(), AgentLease: s.AgentLease.String()})
+				_ = json.NewEncoder(w).Encode(health{Service: tc.service, Version: tc.version, Protocol: tc.protocol, Origin: s.Origin, IdleTimeout: s.IdleTimeout.String(), AgentLease: s.AgentLease.String(), Inspection: relay.Inspection{
+					Browser:   relay.BrowserInspection{Connected: true, Page: &relay.PageInspection{URL: "https://chronicleclassic.com/workshop"}},
+					Ownership: relay.OwnershipInspection{Busy: true, Client: &relay.ClientIdentity{Name: "test-agent", Version: "1"}},
+					Idle:      relay.IdleInspection{Disabled: true},
+				}})
 			}))
 			defer server.Close()
 			s.Port = server.Listener.Addr().(*net.TCPAddr).Port
@@ -155,6 +159,21 @@ func TestHealthIdentityAndShutdown(t *testing.T) {
 			err := Run(context.Background(), []string{"status", "--state-dir", dir}, &out, io.Discard)
 			if (err == nil) != tc.wantOK {
 				t.Fatalf("status error: %v", err)
+			}
+			if tc.wantOK {
+				var inspection relay.Inspection
+				if err := json.Unmarshal(out.Bytes(), &inspection); err != nil {
+					t.Fatal(err)
+				}
+				if !inspection.Browser.Connected || inspection.Browser.Page == nil || inspection.Browser.Page.URL != "https://chronicleclassic.com/workshop" {
+					t.Fatalf("status lost browser metadata: %+v", inspection.Browser)
+				}
+				if !inspection.Ownership.Busy || inspection.Ownership.Client == nil || inspection.Ownership.Client.Name != "test-agent" || inspection.Ownership.Client.Version != "1" {
+					t.Fatalf("status lost ownership metadata: %+v", inspection.Ownership)
+				}
+				if !inspection.Idle.Disabled {
+					t.Fatal("status lost idle metadata")
+				}
 			}
 			if strings.Contains(out.String(), "secret") {
 				t.Fatal("status leaked credentials")
@@ -265,5 +284,48 @@ func TestHealthRedirectDoesNotForwardCredentials(t *testing.T) {
 	s.Port = server.Listener.Addr().(*net.TCPAddr).Port
 	if _, err := checkHealth(context.Background(), s); err == nil {
 		t.Fatal("redirect accepted")
+	}
+}
+
+func TestConcurrentStartReusesWinner(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("detached lifecycle platform")
+	}
+	dir := filepath.Join(t.TempDir(), "state")
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	// All children compete for one state lock, with OS-assigned ports. No
+	// reserve-and-close port race or fixed startup sleeps are needed.
+	const starters = 6
+	ready := make(chan struct{})
+	results := make(chan error, starters)
+	for i := 0; i < starters; i++ {
+		go func() {
+			<-ready
+			results <- Run(ctx, []string{"start", "--port", "0", "--state-dir", dir, "--idle-timeout", "0"}, io.Discard, io.Discard)
+		}()
+	}
+	close(ready)
+	for i := 0; i < starters; i++ {
+		if err := <-results; err != nil {
+			t.Errorf("concurrent start: %v", err)
+		}
+	}
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cleanupCancel()
+	if err := Run(cleanupCtx, []string{"stop", "--force", "--state-dir", dir}, io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "dev.json")); os.IsNotExist(err) {
+			break
+		}
+		select {
+		case <-cleanupCtx.Done():
+			t.Fatal("concurrent winner cleanup timed out")
+		case <-ticker.C:
+		}
 	}
 }

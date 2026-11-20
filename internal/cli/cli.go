@@ -27,6 +27,7 @@ type options struct {
 	force       bool
 }
 type health struct {
+	relay.Inspection
 	Service     string `json:"service"`
 	Version     string `json:"version"`
 	Protocol    int    `json:"protocol"`
@@ -246,19 +247,42 @@ func start(ctx context.Context, o options, out io.Writer) error {
 	defer deadline.Stop()
 	ticker := time.NewTicker(25 * time.Millisecond)
 	defer ticker.Stop()
+	var childExit error
+	childExited := false
 	for {
-		if s, err := readState(o.dir); err == nil && s.PID == cmd.Process.Pid && sameConfig(s, o) {
+		if s, err := readState(o.dir); err == nil {
 			if _, err = checkHealth(ctx, s); err == nil {
-				_, err = fmt.Fprintf(out, "Chronicle started on port %d\n", s.Port)
+				if !sameConfig(s, o) {
+					return errors.New("running daemon configuration differs; stop it explicitly before restarting")
+				}
+				message := "Chronicle already running on port %d\n"
+				if s.PID == cmd.Process.Pid {
+					message = "Chronicle started on port %d\n"
+				}
+				_, err = fmt.Fprintf(out, message, s.Port)
 				return err
+			} else {
+				var networkError net.Error
+				if !errors.As(err, &networkError) {
+					return err
+				}
 			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
 		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case err := <-done:
-			return fmt.Errorf("daemon exited before readiness (%v); run chronicle serve with the same flags for diagnostics", err)
+		case childExit = <-done:
+			// A concurrent start can win the state lock before publishing its
+			// credentials. Keep the bounded readiness wait even if our child
+			// lost that race, and authenticate whichever daemon becomes ready.
+			childExited = true
+			done = nil
 		case <-deadline.C:
+			if childExited {
+				return fmt.Errorf("daemon exited before readiness (%v); run chronicle serve with the same flags for diagnostics", childExit)
+			}
 			return errors.New("daemon did not become ready within 10s; inspect status before retrying (no process was killed)")
 		case <-ticker.C:
 		}

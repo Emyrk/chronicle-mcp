@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -532,5 +533,129 @@ func TestCapabilityRevisionAndSuccessContinuation(t *testing.T) {
 		if got.IsError || resultText(got) != string(want) {
 			t.Fatalf("continuation modified: %s", resultText(got))
 		}
+	}
+}
+
+func TestHealthInspection(t *testing.T) {
+	d, s := setup(t)
+	code, h := request(t, s, d.AgentToken, "GET", "/health", "", nil)
+	if code != 200 || h["browser"].(map[string]any)["connected"] != false || h["ownership"].(map[string]any)["busy"] != false {
+		t.Fatalf("disconnected status: %v", h)
+	}
+	a := client(t, d, s, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	request(t, s, d.Token, "POST", "/v1/browser", "http://localhost:4000", heartbeat())
+	if _, e := a.CallTool(ctx, &mcp.CallToolParams{Name: "whereami"}); e != nil {
+		t.Fatal(e)
+	}
+	_, h = request(t, s, d.AgentToken, "GET", "/health", "", nil)
+	browser := h["browser"].(map[string]any)
+	owner := h["ownership"].(map[string]any)
+	if browser["connected"] != true || browser["page"].(map[string]any)["url"] != "http://localhost:4000/edit" {
+		t.Fatalf("browser status: %v", browser)
+	}
+	if owner["busy"] != true || owner["client"].(map[string]any)["name"] != "test" || owner["client"].(map[string]any)["version"] != "1" {
+		t.Fatalf("owner status: %v", owner)
+	}
+	encoded, _ := json.Marshal(h)
+	for _, secret := range []string{d.Token, d.AgentToken, a.ID(), `"sessionId"`, `"generation"`} {
+		if bytes.Contains(encoded, []byte(secret)) {
+			t.Fatalf("health leaked secret or internal identifier %q", secret)
+		}
+	}
+	if h["lastAgentActivity"] == nil || h["idle"].(map[string]any)["deadline"] == nil {
+		t.Fatal("activity metadata missing")
+	}
+}
+
+func TestInspectionIdleClock(t *testing.T) {
+	d, e := New(Config{IdleTimeout: 6 * time.Hour, AgentLease: time.Minute})
+	if e != nil {
+		t.Fatal(e)
+	}
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	d.now = func() time.Time { return now }
+	d.lastActivity = now
+	now = now.Add(time.Hour)
+	i := d.inspectionLocked()
+	if i.Idle.Disabled || i.Idle.Remaining != "5h0m0s" || !i.Idle.Deadline.Equal(d.lastActivity.Add(6*time.Hour)) {
+		t.Fatalf("incorrect idle: %+v", i.Idle)
+	}
+	now = now.Add(6 * time.Hour)
+	d.pending = &command{}
+	i = d.inspectionLocked()
+	if i.Idle.Remaining != "0s" || !i.Idle.PendingCall {
+		t.Fatalf("incorrect pending idle: %+v", i.Idle)
+	}
+	d.Config.IdleTimeout = 0
+	i = d.inspectionLocked()
+	if !i.Idle.Disabled || i.Idle.Deadline != nil || i.Idle.Remaining != "" {
+		t.Fatalf("incorrect disabled idle: %+v", i.Idle)
+	}
+}
+
+func TestGETActivityAndSessionExpiryUseOneLease(t *testing.T) {
+	d, s := setup(t)
+	d.Config.AgentLease = 5 * time.Second
+	var clock atomic.Int64
+	base := time.Now()
+	d.now = func() time.Time { return base.Add(time.Duration(clock.Load())) }
+	a := client(t, d, s, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	request(t, s, d.Token, "POST", "/v1/browser", "http://localhost:4000", heartbeat())
+	if _, e := a.CallTool(ctx, &mcp.CallToolParams{Name: "whereami"}); e != nil {
+		t.Fatal(e)
+	}
+	clock.Store(int64(d.Config.AgentLease - time.Nanosecond))
+	// GET is activity even when it does not start a new standalone SSE stream.
+	req, _ := http.NewRequestWithContext(ctx, "GET", s.URL+"/mcp", nil)
+	req.Header.Set("Authorization", "Bearer "+d.AgentToken)
+	req.Header.Set("Mcp-Session-Id", a.ID())
+	req.Header.Set("Accept", "application/json")
+	res, e := http.DefaultClient.Do(req)
+	if e != nil {
+		t.Fatal(e)
+	}
+	io.Copy(io.Discard, res.Body)
+	res.Body.Close()
+	if res.StatusCode == 404 {
+		t.Fatal("session expired before lease")
+	}
+	clock.Store(int64(d.Config.AgentLease + time.Nanosecond))
+	d.mu.Lock()
+	d.expireLocked()
+	owner := d.owner
+	count := len(d.agents)
+	d.mu.Unlock()
+	if owner != a.ID() || count != 1 {
+		t.Fatal("GET-renewed agent lost ownership at original deadline")
+	}
+	clock.Store(int64(2 * d.Config.AgentLease))
+	d.mu.Lock()
+	d.expireLocked()
+	owner = d.owner
+	count = len(d.agents)
+	d.mu.Unlock()
+	if owner != "" || count != 0 {
+		t.Fatal("expired agent retained ghost ownership")
+	}
+	eventually(t, func() bool {
+		for session := range d.server.Sessions() {
+			if session.ID() == a.ID() {
+				return false
+			}
+		}
+		return true
+	})
+	res, e = http.DefaultClient.Do(req)
+	if e != nil {
+		t.Fatal(e)
+	}
+	io.Copy(io.Discard, res.Body)
+	res.Body.Close()
+	if res.StatusCode != 404 {
+		t.Fatalf("expired session resurrected: %d", res.StatusCode)
 	}
 }

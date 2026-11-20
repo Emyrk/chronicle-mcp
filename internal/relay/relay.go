@@ -53,7 +53,39 @@ type observation struct {
 	page  Page
 	tools []Tool
 }
+type ClientIdentity struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+}
+
+// Inspection deliberately excludes bearer tokens and raw MCP/browser session IDs.
+type Inspection struct {
+	Browser           BrowserInspection   `json:"browser"`
+	Ownership         OwnershipInspection `json:"ownership"`
+	LastAgentActivity time.Time           `json:"lastAgentActivity"`
+	Idle              IdleInspection      `json:"idle"`
+}
+type BrowserInspection struct {
+	Connected bool            `json:"connected"`
+	Page      *PageInspection `json:"page"`
+}
+type PageInspection struct {
+	URL string `json:"url"`
+}
+type OwnershipInspection struct {
+	Busy   bool            `json:"busy"`
+	Client *ClientIdentity `json:"client"`
+}
+type IdleInspection struct {
+	Disabled    bool       `json:"disabled"`
+	Deadline    *time.Time `json:"deadline"`
+	Remaining   string     `json:"remaining"`
+	PendingCall bool       `json:"pendingCall"`
+}
+
 type agent struct {
+	session  *mcp.ServerSession
+	identity *ClientIdentity
 	seen     time.Time
 	observed observation
 }
@@ -111,7 +143,7 @@ func New(c Config) (*Daemon, error) {
 	// Catalog updates trigger SDK notifications, while middleware preserves browser schemas verbatim.
 	d.server.AddTool(&mcp.Tool{Name: "whereami", Description: "Observe and claim the connected Chronicle browser for this agent session", InputSchema: map[string]any{"type": "object"}}, func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) { return nil, nil })
 	d.server.AddReceivingMiddleware(d.middleware)
-	d.mcpHTTP = mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return d.server }, &mcp.StreamableHTTPOptions{SessionTimeout: c.AgentLease})
+	d.mcpHTTP = mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return d.server }, &mcp.StreamableHTTPOptions{})
 	return d, nil
 }
 func exactOrigin(s string) bool {
@@ -132,9 +164,20 @@ func (d *Daemon) changedLocked() { // AddTool replaces only our local sentinel; 
 }
 func (d *Daemon) expireLocked() {
 	now := d.now()
+	live := map[*mcp.ServerSession]bool{}
+	for session := range d.server.Sessions() {
+		live[session] = true
+	}
 	for id, a := range d.agents {
-		if now.Sub(a.seen) >= d.Config.AgentLease && (d.pending == nil || d.pending.owner != id) {
+		closed := a.session != nil && !live[a.session]
+		expired := now.Sub(a.seen) >= d.Config.AgentLease && (d.pending == nil || d.pending.owner != id)
+		if closed || expired {
 			d.releaseLocked(id)
+			if !closed && a.session != nil {
+				// SDK Close waits for in-flight middleware; never wait with mu held.
+				// HTTP and middleware reject the removed lease immediately.
+				go a.session.Close()
+			}
 		}
 	}
 	if d.browser != nil && now.Sub(d.browser.seen) >= 10*time.Second {
@@ -191,7 +234,17 @@ func (d *Daemon) middleware(next mcp.MethodHandler) mcp.MethodHandler {
 			d.mu.Unlock()
 			return nil, errors.New("relay stopped")
 		}
+		if _, known := d.agents[id]; !known && method != "initialize" {
+			d.mu.Unlock()
+			return nil, errors.New("agent session expired; reconnect")
+		}
 		d.activityLocked(id)
+		if session, ok := req.GetSession().(*mcp.ServerSession); ok {
+			d.agents[id].session = session
+			if init := session.InitializeParams(); init != nil && init.ClientInfo != nil {
+				d.agents[id].identity = &ClientIdentity{Name: shortIdentity(init.ClientInfo.Name), Version: shortIdentity(init.ClientInfo.Version)}
+			}
+		}
 		switch method {
 		case "tools/list":
 			o := d.observeLocked(id, false)
@@ -393,6 +446,13 @@ func (d *Daemon) handle(w http.ResponseWriter, r *http.Request) {
 		id := r.Header.Get("Mcp-Session-Id")
 		d.mu.Lock()
 		d.expireLocked()
+		if id != "" {
+			if _, known := d.agents[id]; !known {
+				d.mu.Unlock()
+				fail(w, 404, "Agent session expired; reconnect")
+				return
+			}
+		}
 		if _, ok := d.agents[id]; ok {
 			// An expired SDK session ID is not agent activity, even if its
 			// relay lease has not yet been swept. Invalid retries cannot keep
@@ -444,7 +504,17 @@ func (d *Daemon) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method + " " + r.URL.Path {
 	case "GET /health":
-		respond(w, 200, map[string]any{"service": "chronicle", "version": Version, "protocol": 2, "agents": len(d.agents), "pending": boolInt(d.pending != nil), "origin": d.Config.Origin, "idleTimeout": d.Config.IdleTimeout.String(), "agentLease": d.Config.AgentLease.String()})
+		respond(w, 200, struct {
+			Inspection
+			Service     string `json:"service"`
+			Version     string `json:"version"`
+			Protocol    int    `json:"protocol"`
+			Agents      int    `json:"agents"`
+			Pending     int    `json:"pending"`
+			Origin      string `json:"origin"`
+			IdleTimeout string `json:"idleTimeout"`
+			AgentLease  string `json:"agentLease"`
+		}{d.inspectionLocked(), "chronicle", Version, 2, len(d.agents), boolInt(d.pending != nil), d.Config.Origin, d.Config.IdleTimeout.String(), d.Config.AgentLease.String()})
 	case "POST /shutdown":
 		var v struct {
 			Force bool `json:"force"`
@@ -651,4 +721,32 @@ func (t *Tool) UnmarshalJSON(b []byte) error {
 
 func (d *Daemon) idleLocked() bool {
 	return d.pending == nil && d.Config.IdleTimeout > 0 && d.now().Sub(d.lastActivity) >= d.Config.IdleTimeout
+}
+
+func shortIdentity(s string) string {
+	r := []rune(s)
+	if len(r) > 256 {
+		r = r[:256]
+	}
+	return string(r)
+}
+func (d *Daemon) inspectionLocked() Inspection {
+	i := Inspection{LastAgentActivity: d.lastActivity, Ownership: OwnershipInspection{Busy: d.owner != ""}, Idle: IdleInspection{Disabled: d.Config.IdleTimeout == 0, PendingCall: d.pending != nil}}
+	if d.browser != nil {
+		i.Browser = BrowserInspection{Connected: true, Page: &PageInspection{URL: d.browser.Page.URL}}
+	}
+	if a := d.agents[d.owner]; a != nil && a.identity != nil {
+		copy := *a.identity
+		i.Ownership.Client = &copy
+	}
+	if d.Config.IdleTimeout > 0 {
+		deadline := d.lastActivity.Add(d.Config.IdleTimeout)
+		i.Idle.Deadline = &deadline
+		remaining := deadline.Sub(d.now())
+		if remaining < 0 {
+			remaining = 0
+		}
+		i.Idle.Remaining = remaining.String()
+	}
+	return i
 }

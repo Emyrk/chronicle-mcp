@@ -43,7 +43,12 @@ The directory is mode 0700 and `dev.json` is mode 0600. It contains separate
 browser and agent bearer tokens, listener port, version, and configuration.
 Never share or commit it. A daemon lock prevents competing writers. State is
 atomically written, symlink paths are refused, and shutdown removes only the
-state belonging to that daemon. `status` emits health JSON without credentials.
+state belonging to that daemon. `status` emits health JSON without credentials. It includes the connected browser
+page URL, ownership busy state and owner client name/version, last agent activity,
+and the idle deadline and remaining duration. Raw MCP/browser session identifiers
+are omitted. A disabled idle timer has `disabled: true` and no deadline. A
+`pendingCall` flag explains why an elapsed idle deadline cannot yet stop the daemon.
+Client names are self-reported, not authenticated identities.
 `stop` uses authenticated HTTP, not a recorded PID. Active sessions or calls
 require `--force`; shutdown never invokes a save or erases browser working files.
 
@@ -72,7 +77,9 @@ ends on MCP DELETE/disconnect, bounded inactivity lease expiry, browser lease
 expiry, or daemon shutdown. A disconnected TCP request alone is not a reliable
 session-close signal. Clients should DELETE their MCP session on exit and send
 MCP pings more frequently than `--agent-lease` while they want to retain it.
-A silent SSE connection is not an indefinite ownership lease.
+A silent SSE connection is not an indefinite ownership lease. The relay owns the
+single session inactivity clock and closes the MCP SDK session when its lease
+expires; SDK timers cannot expire a GET-renewed session behind that clock.
 
 All authenticated activity from a known connected agent, including pings and
 HTTP keepalive requests, renews its activity. Browser heartbeats, status/health
