@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -156,7 +157,7 @@ func TestHealthIdentityAndShutdown(t *testing.T) {
 		protocol         int
 		wantOK           bool
 	}{
-		{"valid", 200, "chronicle", relay.Version, 2, true}, {"unauthorized", 401, "chronicle", relay.Version, 2, false}, {"unrelated", 200, "other", relay.Version, 2, false}, {"version", 200, "chronicle", "old", 2, false}, {"protocol", 200, "chronicle", relay.Version, 1, false},
+		{"valid", 200, "chronicle", relay.Version, relay.Protocol, true}, {"unauthorized", 401, "chronicle", relay.Version, relay.Protocol, false}, {"unrelated", 200, "other", relay.Version, relay.Protocol, false}, {"version", 200, "chronicle", "old", relay.Protocol, false}, {"protocol", 200, "chronicle", relay.Version, 1, false}, {"protocol2", 200, "chronicle", "0.1.0", 2, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := fixture()
@@ -178,9 +179,11 @@ func TestHealthIdentityAndShutdown(t *testing.T) {
 				}
 				w.WriteHeader(tc.status)
 				_ = json.NewEncoder(w).Encode(health{Service: tc.service, Version: tc.version, Protocol: tc.protocol, Origin: s.Origin, IdleTimeout: s.IdleTimeout.String(), AgentLease: s.AgentLease.String(), Inspection: relay.Inspection{
-					Browser:   relay.BrowserInspection{Connected: true, Page: &relay.PageInspection{URL: "https://chronicleclassic.com/workshop"}},
-					Ownership: relay.OwnershipInspection{Busy: true, Client: &relay.ClientIdentity{Name: "test-agent", Version: "1"}},
-					Idle:      relay.IdleInspection{Disabled: true},
+					Connections: []relay.ConnectionInspection{
+						{ID: "tab-a", Name: "Workshop A", Page: &relay.PageInspection{URL: "https://chronicleclassic.com/workshop"}, Owner: &relay.ClientIdentity{ID: "public-agent", Name: "test-agent", Version: "1"}, OwnershipRevision: 3, Availability: "busy", Pending: true},
+						{ID: "tab-b", Name: "Workshop B", Page: &relay.PageInspection{URL: "https://chronicleclassic.com/other"}, Availability: "available"},
+					},
+					Idle: relay.IdleInspection{Disabled: true},
 				}})
 			}))
 			defer server.Close()
@@ -194,16 +197,39 @@ func TestHealthIdentityAndShutdown(t *testing.T) {
 			if (err == nil) != tc.wantOK {
 				t.Fatalf("status error: %v", err)
 			}
+			if tc.protocol == 2 {
+				if err == nil || !strings.Contains(err.Error(), "upgrade and restart") {
+					t.Fatalf("protocol 2 needs actionable upgrade error: %v", err)
+				}
+				startErr := Run(context.Background(), []string{"start", "--port", "0", "--state-dir", dir}, io.Discard, io.Discard)
+				if startErr == nil || !strings.Contains(startErr.Error(), "upgrade and restart") {
+					t.Fatalf("start accepted protocol 2: %v", startErr)
+				}
+				current, readErr := readState(dir)
+				if readErr != nil || current != s {
+					t.Fatal("protocol 2 rejection changed daemon state")
+				}
+			}
 			if tc.wantOK {
 				var inspection relay.Inspection
 				if err := json.Unmarshal(out.Bytes(), &inspection); err != nil {
 					t.Fatal(err)
 				}
-				if !inspection.Browser.Connected || inspection.Browser.Page == nil || inspection.Browser.Page.URL != "https://chronicleclassic.com/workshop" {
-					t.Fatalf("status lost browser metadata: %+v", inspection.Browser)
+				if len(inspection.Connections) != 2 {
+					t.Fatalf("status lost connections: %+v", inspection.Connections)
 				}
-				if !inspection.Ownership.Busy || inspection.Ownership.Client == nil || inspection.Ownership.Client.Name != "test-agent" || inspection.Ownership.Client.Version != "1" {
-					t.Fatalf("status lost ownership metadata: %+v", inspection.Ownership)
+				first, second := inspection.Connections[0], inspection.Connections[1]
+				if first.ID != "tab-a" || first.Name != "Workshop A" || first.Page == nil || first.Page.URL != "https://chronicleclassic.com/workshop" || first.OwnershipRevision != 3 || first.Availability != "busy" || !first.Pending {
+					t.Fatalf("status lost connection metadata: %+v", first)
+				}
+				if first.Owner == nil || first.Owner.ID != "public-agent" || first.Owner.Name != "test-agent" || first.Owner.Version != "1" {
+					t.Fatalf("status lost owner metadata: %+v", first.Owner)
+				}
+				if second.ID != "tab-b" || second.Availability != "available" || second.Owner != nil || second.Pending {
+					t.Fatalf("status lost available connection metadata: %+v", second)
+				}
+				if strings.Contains(out.String(), `"browser":`) || strings.Contains(out.String(), `"ownership":`) {
+					t.Fatal("status retained singleton metadata")
 				}
 				if !inspection.Idle.Disabled {
 					t.Fatal("status lost idle metadata")
@@ -361,5 +387,97 @@ func TestConcurrentStartReusesWinner(t *testing.T) {
 			t.Fatal("concurrent winner cleanup timed out")
 		case <-ticker.C:
 		}
+	}
+}
+
+func TestLargeRegistryStatusReuseAndStop(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("detached lifecycle platform")
+	}
+	dir := filepath.Join(t.TempDir(), "state")
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	args := []string{"start", "--port", "0", "--state-dir", dir, "--idle-timeout", "0"}
+	if err := Run(ctx, args, io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = Run(cleanup, []string{"stop", "--force", "--state-dir", dir}, io.Discard, io.Discard)
+	})
+	state, err := readState(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	browserRequest := func(path, id, token string, body any) map[string]any {
+		t.Helper()
+		encoded, _ := json.Marshal(body)
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d%s", state.Port, path), bytes.NewReader(encoded))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Origin", "http://localhost:4000")
+		req.Header.Set("Content-Type", "application/json")
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+			req.Header.Set("X-Chronicle-Client", id)
+		}
+		response, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		if response.StatusCode != 200 {
+			t.Fatalf("browser route %s: %d", path, response.StatusCode)
+		}
+		var result map[string]any
+		if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	prefix := "http://localhost:4000/"
+	longURL := prefix + strings.Repeat("a", 8192-len(prefix))
+	for i := 0; i < 9; i++ {
+		id := fmt.Sprintf("large-registry-%d", i)
+		token := browserRequest("/v1/connect", id, "", map[string]any{"protocol": relay.Protocol, "clientId": id})["token"].(string)
+		browserRequest("/v1/browser", id, token, map[string]any{"clientId": id, "name": id, "page": map[string]any{"url": longURL, "generation": "g1", "sessionId": "page"}, "tools": []any{}})
+	}
+	response, err := request(ctx, state, http.MethodGet, "/health", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := io.ReadAll(io.LimitReader(response.Body, relay.MaxControlResponseBytes+1))
+	response.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) <= 64<<10 || len(raw) > relay.MaxControlResponseBytes {
+		t.Fatalf("unexpected health size: %d", len(raw))
+	}
+	var output bytes.Buffer
+	if err := Run(ctx, []string{"status", "--state-dir", dir}, &output, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	var status health
+	if err := json.Unmarshal(output.Bytes(), &status); err != nil {
+		t.Fatal(err)
+	}
+	if len(status.Connections) != 9 {
+		t.Fatalf("lost connections: %d", len(status.Connections))
+	}
+	if err := Run(ctx, args, io.Discard, io.Discard); err != nil {
+		t.Fatalf("reuse with large registry: %v", err)
+	}
+	after, err := readState(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.AgentToken != state.AgentToken {
+		t.Fatal("reused daemon replaced")
+	}
+	if err := Run(ctx, []string{"stop", "--state-dir", dir}, io.Discard, io.Discard); err != nil {
+		t.Fatalf("stop with large registry: %v", err)
 	}
 }

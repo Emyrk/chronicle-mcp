@@ -8,9 +8,12 @@ it is not a local Lua project editor or a model provider.
 
 ## Start a browser task
 
-1. Call the MCP tool `whereami` with `{}` and inspect the connection and page.
-   If disconnected, ask the user to open Chronicle and click **Connect to local
-   MCP**. Only `whereami` is available before a tab connects.
+1. Call `whereami` with `{}` to observe the selected connection; it never acquires
+   a tab. If unselected, call `list_connections` and ask the user which connection
+   to use unless they already identified its ID or unique name. Explicitly call
+   `select_connection` with `connection_id`, then `whereami` again. Do not auto-select
+   even a single tab. If no tabs exist, ask the user to click **Connect to local
+   MCP** in Chronicle. Only the four relay connection tools exist before selection.
 2. Discover the currently advertised MCP tools. Do not assume a tool exists
    because it is mentioned here. Client-visible names may include an MCP-server
    prefix; use the names your client exposes.
@@ -63,9 +66,11 @@ working copy. Editing them does not edit the user's module through MCP.
   temporary state directories in tests.
 - Keep daemon `dev.json` in its per-user state directory private, along with
   legacy `.chronicle/dev.json`. They contain bearer credentials.
-- `whereami` claims browser ownership for an agent session; tools/list does not.
+- Only `select_connection` claims browser ownership; `whereami` and tools/list
+  are observation-only. Release the old connection before explicitly selecting
+  another.
   If another agent owns it, report the conflict rather than taking over.
-  Browser ownership UI and tray support are follow-ups.
+  Browser ownership UI belongs in the Chronicle frontend; tray support is a follow-up.
 - Preserve dynamic discovery, page/session invalidation, cancellation, and
   browser-owned validation and approval. Do not add fixed tool catalogs or
   filesystem-based module synchronization to the relay.
