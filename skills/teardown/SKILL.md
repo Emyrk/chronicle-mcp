@@ -7,17 +7,25 @@ disable-model-invocation: true
 # Stop Chronicle
 
 This stops a shared per-user daemon, not just this Claude session. Warn that
-other agents and browser work may be interrupted. With normal command approval,
-inspect status first:
+other agents and browser work may be interrupted.
+
+Resolve the plugin root and the same persistent data directory used during setup
+from Claude's plugin context; do not assume plugin variables are exported into
+the shell. If the data path is unavailable, ask the user to confirm it rather
+than guessing from directory names. Pass it explicitly to every command,
+including `stop --force`. Substitute the resolved absolute paths into the
+placeholders below; do not execute the placeholders literally.
+
+With normal command approval, inspect status first:
 
 ```sh
-sh "${CLAUDE_PLUGIN_ROOT}/scripts/chronicle.sh" status
+CLAUDE_PLUGIN_DATA="/resolved/plugin/data" sh "/resolved/plugin/root/scripts/chronicle.sh" status
 ```
 
 Ask for explicit shutdown confirmation after explaining the impact. Then run:
 
 ```sh
-sh "${CLAUDE_PLUGIN_ROOT}/scripts/chronicle.sh" stop
+CLAUDE_PLUGIN_DATA="/resolved/plugin/data" sh "/resolved/plugin/root/scripts/chronicle.sh" stop
 ```
 
 If stop refuses because clients or work are active, report that refusal and ask

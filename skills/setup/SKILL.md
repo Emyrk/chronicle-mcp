@@ -51,18 +51,35 @@ directory for `status` and `stop`, with user approval. Active work requires
 renewed explicit confirmation before `stop --force`. Do not silently shut down
 or upgrade a shared service; this setup has no upgrade engine.
 
+## Resolve plugin paths
+
+Do not assume Claude Code's plugin variables are exported into the command shell.
+Resolve `CLAUDE_PLUGIN_ROOT` and `CLAUDE_PLUGIN_DATA` from Claude's plugin context
+before constructing commands. Use absolute paths, and pass the resolved data
+path explicitly as an environment assignment on every installer invocation.
+Do not leave an unresolved variable for the shell to expand to an empty string.
+
+If the data path is unavailable, ask the user to confirm an absolute persistent
+private directory. Do not infer ownership from a directory's name, existence,
+creation time, or permissions alone. Expand an approved `~` path to an absolute
+path before using it. Confirm that the MCP `headersHelper` will resolve
+`CLAUDE_PLUGIN_DATA` to this same directory; a shell assignment affects only that
+command and does not configure the MCP helper. If that cannot be established,
+report the configuration blocker rather than claiming setup will connect.
+Never inspect or print bearer credentials to check the path.
+
 ## Start the daemon
 
-Ask for normal command approval before running:
+Substitute the resolved absolute paths into the placeholders below (these are
+not literal paths). Ask for normal command approval before running:
 
 ```sh
-sh "${CLAUDE_PLUGIN_ROOT}/scripts/chronicle.sh" start
-sh "${CLAUDE_PLUGIN_ROOT}/scripts/chronicle.sh" status
+CLAUDE_PLUGIN_DATA="/resolved/plugin/data" sh "/resolved/plugin/root/scripts/chronicle.sh" start
+CLAUDE_PLUGIN_DATA="/resolved/plugin/data" sh "/resolved/plugin/root/scripts/chronicle.sh" status
 ```
 
 The installer supports macOS and Linux (arm64/amd64), requires curl and GitHub CLI,
-and needs an absolute private `CLAUDE_PLUGIN_DATA` directory supplied
-by Claude Code. It does not require Node. The pin does not prove the release exists.
+and needs the resolved absolute private `CLAUDE_PLUGIN_DATA` directory. It does not require Node. The pin does not prove the release exists.
 If the pinned tag has not been published, report the download failure; do not
 fabricate artifacts or use another version. For local development only, the
 user may explicitly select an absolute executable with `CHRONICLE_DEV_BINARY`;
