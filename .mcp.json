@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "chronicle-mcp": {
+      "command": "node",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/tools/cli.mjs",
+        "mcp",
+        "--root",
+        "${CLAUDE_PLUGIN_DATA}"
+      ]
+    }
+  }
+}
