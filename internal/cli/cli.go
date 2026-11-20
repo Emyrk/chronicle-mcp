@@ -41,13 +41,13 @@ type health struct {
 // Run never writes credentials except for the explicit auth headers command.
 func Run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: chronicle serve|start|status|stop|auth headers [flags]")
+		return errors.New("usage: chronicle-mcp serve|start|status|stop|auth headers [flags]")
 	}
 	command := args[0]
 	args = args[1:]
 	if command == "auth" {
 		if len(args) == 0 || args[0] != "headers" {
-			return errors.New("usage: chronicle auth headers [--state-dir directory]")
+			return errors.New("usage: chronicle-mcp auth headers [--state-dir directory]")
 		}
 		args = args[1:]
 	}
@@ -281,7 +281,7 @@ func start(ctx context.Context, o options, out io.Writer) error {
 			done = nil
 		case <-deadline.C:
 			if childExited {
-				return fmt.Errorf("daemon exited before readiness (%v); run chronicle serve with the same flags for diagnostics", childExit)
+				return fmt.Errorf("daemon exited before readiness (%v); run chronicle-mcp serve with the same flags for diagnostics", childExit)
 			}
 			return errors.New("daemon did not become ready within 10s; inspect status before retrying (no process was killed)")
 		case <-ticker.C:

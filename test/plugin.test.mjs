@@ -97,7 +97,7 @@ test('pinned artifact installation verifies hash, reuses cache, and refuses unsa
   await assert.rejects(f.run(['start'], { ...local, CLAUDE_PLUGIN_DATA: `${link}/data` }), /symlinks/);
   await writeFile(path.join(f.dir, 'release.tsv'), metadata('0'.repeat(64)));
   await assert.rejects(f.run(['start'], local), /SHA256 mismatch/);
-  await assert.rejects(access(path.join(f.data, 'bin/v0.0.0-fixture/chronicle')), { code: 'ENOENT' });
+  await assert.rejects(access(path.join(f.data, 'bin/v0.0.0-fixture/chronicle-mcp')), { code: 'ENOENT' });
   await writeFile(path.join(f.dir, 'release.tsv'), metadata(digest));
   assert.equal((await f.run(['start'], local)).stdout, 'start\n');
   const downloaded = requests;
@@ -105,7 +105,7 @@ test('pinned artifact installation verifies hash, reuses cache, and refuses unsa
   assert.equal((await f.run(['headers'], local)).stdout, 'auth\nheaders\n');
   assert.equal((await f.run(['stop'], local)).stdout, 'stop\n');
   assert.equal(requests, downloaded);
-  const binary = path.join(f.data, 'bin/v0.0.0-fixture/chronicle');
+  const binary = path.join(f.data, 'bin/v0.0.0-fixture/chronicle-mcp');
   await writeFile(binary, 'corrupt');
   await assert.rejects(f.run(['start'], local), /installed binary SHA256 mismatch/);
   assert.equal(requests, downloaded, 'corruption must not trigger silent replacement');

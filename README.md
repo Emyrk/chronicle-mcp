@@ -31,7 +31,7 @@ install or start anything automatically.
 
 Run `/chronicle:setup` and approve the setup command. The installer downloads only
 the version pinned in `scripts/release.tsv`, verifies its bundled SHA256, and
-stores the executable in `${CLAUDE_PLUGIN_DATA}/bin/<version>/chronicle`. It checks
+stores the executable in `${CLAUDE_PLUGIN_DATA}/bin/<version>/chronicle-mcp`. It checks
 the hash again before every invocation. A checksum fetched alongside an artifact
 is not trusted. Existing compatible services are reused by the CLI; setup never
 silently stops or upgrades a running daemon. Resolve an occupied port or version
@@ -71,8 +71,8 @@ Requires Go 1.25+. Build into an ignored local directory:
 
 ```sh
 mkdir -p .build
-go build -o .build/chronicle ./cmd/chronicle
-export CHRONICLE_DEV_BINARY="$PWD/.build/chronicle"
+go build -o .build/chronicle-mcp ./cmd/chronicle-mcp
+export CHRONICLE_DEV_BINARY="$PWD/.build/chronicle-mcp"
 "$CHRONICLE_DEV_BINARY" start
 "$CHRONICLE_DEV_BINARY" status
 claude --plugin-dir "$PWD"
@@ -100,18 +100,18 @@ browser or discard those edits. Tray and browser ownership UI are follow-ups.
 ## Headless service and other MCP clients
 
 ```sh
-chronicle serve    # foreground, suitable for a service manager
-chronicle start    # detached; reuse only a compatible existing daemon
-chronicle status   # inspect state without exposing credentials
-chronicle stop    # graceful shared shutdown; refuses active clients/work
+chronicle-mcp serve    # foreground, suitable for a service manager
+chronicle-mcp start    # detached; reuse only a compatible existing daemon
+chronicle-mcp status   # inspect state without exposing credentials
+chronicle-mcp stop    # graceful shared shutdown; refuses active clients/work
 ```
 
-After explicit approval to disconnect everyone, `chronicle stop --force` stops
+After explicit approval to disconnect everyone, `chronicle-mcp stop --force` stops
 an active service. It never kills an unrelated listener by PID or port.
 
 Other clients can connect to `http://127.0.0.1:17643/mcp` using stateful
 Streamable HTTP and the private Authorization header provided by
-`chronicle auth headers`. Configure a header helper where supported; otherwise
+`chronicle-mcp auth headers`. Configure a header helper where supported; otherwise
 use the client's secure credential configuration. Do not paste credentials into
 chat or commit them. MCP sessions share the service, not browser ownership.
 

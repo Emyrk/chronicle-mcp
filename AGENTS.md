@@ -53,9 +53,9 @@ working copy. Editing them does not edit the user's module through MCP.
 - Read [README.md](README.md) and [docs/daemon.md](docs/daemon.md) for the Go
   daemon, CLI, exact-origin configuration, and protocol. Go 1.25+ builds it;
   Node.js 22+ is only needed for legacy regression and installer tests.
-- Start the shared service with `chronicle start` or foreground `chronicle serve`.
+- Start the shared service with `chronicle-mcp start` or foreground `chronicle-mcp serve`.
   Agents connect over authenticated HTTP at `http://127.0.0.1:17643/mcp`.
-  `chronicle auth headers` is a private credential helper, not a chat command:
+  `chronicle-mcp auth headers` is a private credential helper, not a chat command:
   never capture or display its output in reports.
 - Do not also start the legacy Node relay on the same port. Reuse only a verified
   compatible daemon; report unrelated port conflicts and incompatible versions.

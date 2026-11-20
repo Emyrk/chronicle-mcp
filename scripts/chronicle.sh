@@ -3,7 +3,7 @@
 # never a checksum downloaded alongside an untrusted artifact.
 set -eu
 umask 077
-fail() { printf '%s\n' "chronicle: $*" >&2; exit 1; }
+fail() { printf '%s\n' "chronicle-mcp: $*" >&2; exit 1; }
 action=${1:-}
 case "$action" in start|status|stop|headers) ;; *) fail 'usage: chronicle.sh start|status|stop|headers [--force]' ;; esac
 shift
@@ -14,7 +14,7 @@ case "$(uname -m)" in x86_64|amd64) arch=amd64 ;; arm64|aarch64) arch=arm64 ;; *
 if [ -n "${CHRONICLE_DEV_BINARY:-}" ]; then
   case "$CHRONICLE_DEV_BINARY" in /*) ;; *) fail 'CHRONICLE_DEV_BINARY must be an absolute path' ;; esac
   [ -f "$CHRONICLE_DEV_BINARY" ] && [ -x "$CHRONICLE_DEV_BINARY" ] || fail 'development binary is not executable'
-  printf '%s\n' 'chronicle: using explicitly selected development binary; release integrity NOT verified' >&2
+  printf '%s\n' 'chronicle-mcp: using explicitly selected development binary; release integrity NOT verified' >&2
   exec "$CHRONICLE_DEV_BINARY" "$action" "$@"
 fi
 root=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
@@ -48,7 +48,7 @@ for dir in "$data/bin" "$data/bin/$version"; do
   [ ! -L "$dir" ] || fail 'binary directory must not be a symlink'
   mkdir -p -- "$dir"
 done
-bin=$data/bin/$version/chronicle
+bin=$data/bin/$version/chronicle-mcp
 [ ! -L "$bin" ] || fail 'binary must not be a symlink'
 hash() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'

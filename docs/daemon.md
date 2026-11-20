@@ -6,10 +6,10 @@ uses the official Go MCP SDK v1.8.0, verified against the module registry, and
 requires Go 1.25 or newer to build:
 
 ```sh
-go build -o chronicle ./cmd/chronicle
-./chronicle start
-./chronicle status
-./chronicle stop
+go build -o chronicle-mcp ./cmd/chronicle-mcp
+./chronicle-mcp start
+./chronicle-mcp status
+./chronicle-mcp stop
 ```
 
 `serve` runs in the foreground. `start` detaches and waits for authenticated
@@ -60,7 +60,7 @@ below emits **only** the JSON request headers to stdout, for a client's private
 header helper. It reads existing state and never installs or starts anything:
 
 ```sh
-chronicle auth headers
+chronicle-mcp auth headers
 ```
 
 Configure the client's headers helper to execute that command. Do not paste its

@@ -12,7 +12,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), shutdownSignals()...)
 	defer stop()
 	if err := cli.Run(ctx, os.Args[1:], os.Stdout, os.Stderr); err != nil {
-		fmt.Fprintln(os.Stderr, "chronicle:", err)
+		fmt.Fprintln(os.Stderr, "chronicle-mcp:", err)
 		os.Exit(1)
 	}
 }
