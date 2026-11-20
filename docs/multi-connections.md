@@ -1,6 +1,6 @@
 # Multi-browser connections: proposed protocol 3
 
-Status: draft pending agreement with the Chronicle frontend implementation.
+Status: agreed with the Chronicle frontend agent; implementation pending.
 This is a design contract, not a description of the current protocol 2 daemon.
 
 ## Invariants
@@ -48,7 +48,8 @@ never refresh the explicit observation used to authorize an operation.
 Owner display data is `{id,name,version}`: `id` is a daemon-generated public
 opaque identifier, NOT an MCP transport session ID or bearer token. Client names
 and versions are self-reported, bounded, untrusted display text, not identities
-for authorization. Availability is one of `available`, `owned_by_you`, or `busy`.
+for authorization. Owner id/name/version are nonempty and at most 128 Unicode
+code points each; the public owner ID uses opaque ASCII. Availability is one of `available`, `owned_by_you`, or `busy`.
 No browser bearer credentials, tool arguments, or results appear in listings.
 
 ## Browser identity and authentication
@@ -64,7 +65,8 @@ requires agent selection again. Do not persist a credential/connection ID in
 storage that a duplicated tab inherits. A display name may be persisted.
 
 `POST /v1/connect` with an approved Origin accepts `{protocol:3,clientId}` and
-returns `{protocol:3,clientId,token}`. The credential is unique to that connection
+returns `{protocol:3,clientId,token}`, echoing the requested clientId. The token
+is exactly 64 lowercase hexadecimal characters. The credential is unique to that connection
 and grants no agent/control authority. Active duplicate IDs return 409 rather
 than replacing an existing tab. Unused bootstrap allocations expire after the
 browser heartbeat lease. Only connections with a valid heartbeat appear in
@@ -117,7 +119,8 @@ Response:
 `owner` is null when available. `resultAccepted` is present only for submitted
 results. Unknown/late calls or mismatched ownership revisions return
 `resultAccepted:false`, never unpairing a healthy tab. Ownership revision starts
-at zero and increases on every acquisition or release/revocation, including
+at zero, is always a nonnegative JavaScript-safe integer, and increases on every
+acquisition or release/revocation, including
 release followed by reacquisition by the same agent.
 
 ### Poll: `GET /v1/state`
@@ -125,7 +128,9 @@ release followed by reacquisition by the same agent.
 Require the token-bound `X-Chronicle-Client`. Return `{protocol:3,connection,
 commands:[...]}` for that connection only. Commands retain existing fields and
 add `ownershipRevision`. Never return another tab's work. At most one operation
-is pending per connection; different tabs can execute independently.
+is pending per connection; different tabs can execute independently. Frontend
+parsing rejects more than one command, a command without a non-null metadata
+owner, or a command revision that differs from the connection metadata.
 
 Heartbeat and poll responses expose the same connection metadata. When ownership
 revision changes, the frontend cancels stale approvals/queued work and ignores
@@ -137,14 +142,18 @@ never whichever revision is current when the worker finishes.
 
 Require the connection-bound credential/header and
 `{expectedOwnershipRevision}`. A stale revision returns 409 with fresh connection
-metadata so the UI does not revoke a new owner accidentally. Otherwise revoke
+metadata in the top-level `connection` field so the UI does not revoke a new
+owner accidentally. A failed or stale revoke immediately cancels local work;
+the frontend never retries automatically against a newer revision. Otherwise revoke
 the current owner, cancel pending work, invalidate the agent's selection and
 observation, and return `{ok:true,connection}`. An already-unowned connection with
 a matching revision is an idempotent success. The tab stays connected.
 
 ### Disconnect: `POST /v1/browser/disconnect`
 
-Require the connection-bound credential/header. Remove that connection, release
+Require the connection-bound credential/header; an empty JSON body `{}` is
+accepted. Stop frontend polling first, then use an independent short timeout for
+the best-effort disconnect request. Remove that connection, release
 its owner, cancel its pending operations, and invalidate the token. Return
 `{ok:true}`. The frontend clears credentials and local control state even if the
 request fails; heartbeat expiry is the fallback. Never close or clear the module.
@@ -159,10 +168,18 @@ request fails; heartbeat expiry is the fallback. Never close or clear the module
 - Navigation changes only that tab's page generation/session and cancels its
   pending calls. Ownership survives navigation within the connection Origin;
   the agent must observe and reload guidance before resuming.
+- A transient heartbeat/poll network failure immediately cancels local pending
+  work. Retry the same credential/ID only within the lease; never silently
+  bootstrap a replacement connection. HTTP 401/403/404 is terminal and requires
+  explicit reconnect. Keep started/aborted command IDs deduplicated for the
+  whole connection lifetime so recovery cannot reexecute work the daemon still
+  considers pending. Cancellation is not rollback of a completed mutation.
 - Daemon restart invalidates credentials and selections. Reconnecting a browser
   never restores agent ownership automatically.
 - UI shows connection name, copyable ID, connected/reconnecting/disconnected
   state, available/owned status, owner display name, and a revoke-control action.
+- Derive the initial name from module/page context. A user-edited name survives
+  SPA navigation; owner names are rendered as plain text.
 - Rename, revoke, and disconnect are explicit user actions. Use confirmation for
   revocation/disconnection when work or approval is pending. Do not expose tokens.
 - Show actionable unsupported-protocol, expired-session, and connection-conflict
