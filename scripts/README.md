@@ -22,7 +22,9 @@ The release workflow uses `actions/attest-build-provenance` on raw executables
 built on GitHub-hosted runners. The installer verifies the temporary download
 before atomic installation, and verifies the installed file before every
 invocation, including credential helpers. This requires network access and may
-require GitHub CLI authentication; never expose tokens in chat. Verification
+require GitHub CLI authentication. If authentication is needed, have the user
+complete the normal `gh auth login` flow privately; never request or expose tokens
+in chat. Network or authentication failures fail closed. Verification
 failure (including unsupported verifier flags) blocks execution, not a fallback
 to adjacent checksums or unauthenticated bytes. Verifier diagnostics go to stderr.
 

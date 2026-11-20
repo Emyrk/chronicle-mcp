@@ -37,8 +37,10 @@ The installer verifies GitHub provenance for the pinned version against
 rejecting self-hosted runners. It rechecks installed binaries on every invocation.
 If required verification flags are unsupported, ask permission to upgrade `gh`;
 never remove flags to make verification pass. Network/authentication failures
-also block execution. The explicitly approved `CHRONICLE_DEV_BINARY` path does
-not need `gh` and is not a verified release download.
+also block execution. If GitHub authentication is required, ask the user to
+complete the normal `gh auth login` flow privately, never to paste tokens into
+chat. The explicitly approved `CHRONICLE_DEV_BINARY` path does not need `gh` and
+is not a verified release download.
 
 ## Before a plugin upgrade
 
