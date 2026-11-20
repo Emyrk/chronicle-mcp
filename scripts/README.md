@@ -4,24 +4,35 @@
 artifacts, not archives (no extraction or archive path traversal). Native Windows
 installation is intentionally unsupported; use the Go CLI manually.
 
-`release.tsv` is bundled trust metadata reviewed and shipped with the plugin.
-The current `unreleased unreleased` sentinel deliberately prevents a download.
-To prepare an actual release, replace it with:
+`release.tsv` pins `v0.2.1 attested`, not a mutable latest release. This selects
+raw assets named `chronicle-mcp-<os>-<arch>` from
+`https://github.com/Emyrk/chronicle-mcp/releases/download/v0.2.1/` for
+`linux-amd64`, `linux-arm64`, `darwin-amd64`, and `darwin-arm64`.
+The pin is not evidence that the release exists: downloads fail closed until the
+tag's release workflow publishes the artifacts and their attestations.
 
-- First line: `<pinned-version> released`
-- Following lines: `<os>-<arch> <https-artifact-url> <lowercase-sha256>`
+Before execution, `gh attestation verify` authenticates the artifact against:
 
-Fields are whitespace-separated. Supported platforms are `linux-amd64`,
-`linux-arm64`, `darwin-amd64`, and `darwin-arm64`. Include exactly one row for
-each supported published artifact. Compute SHA256 from the reviewed build output
-and commit the hashes with the plugin; never trust adjacent downloaded checksum
-files or a mutable `latest` endpoint. Do not mark unreleased builds released or
-insert placeholder digests. There is no release publishing automation here.
+- `--repo Emyrk/chronicle-mcp`
+- `--signer-workflow Emyrk/chronicle-mcp/.github/workflows/release.yml`
+- `--source-ref refs/tags/v0.2.1` (derived from the pinned version)
+- `--deny-self-hosted-runners`
+
+The release workflow uses `actions/attest-build-provenance` on raw executables
+built on GitHub-hosted runners. The installer verifies the temporary download
+before atomic installation, and verifies the installed file before every
+invocation, including credential helpers. This requires network access and may
+require GitHub CLI authentication; never expose tokens in chat. Verification
+failure (including unsupported verifier flags) blocks execution, not a fallback
+to adjacent checksums or unauthenticated bytes. Verifier diagnostics go to stderr.
+
+Legacy `<version> released` metadata with platform URL/SHA256 rows remains only
+for bundled-hash regression fixtures. Production metadata uses attested mode.
 
 Changing plugin metadata selects a new versioned install directory, but does not
 permit replacing a running daemon. The CLI owns compatible reuse and refusal of
 incompatible listeners. The installer never calls stop during setup, nor deletes
-or replaces an existing binary whose hash mismatches. An interrupted install
+or replaces an existing binary whose verification fails. An interrupted install
 cleans its temporary download and lock where possible; inspect a leftover lock
 manually after an uncatchable process termination.
 
@@ -36,20 +47,22 @@ production metadata, and never start or stop the user's service.
 `start`, `status`, and `stop [--force]` forward to the CLI. `headers` forwards to
 `auth headers`, which prints secret JSON for MCP consumption, not chat. No command
 except `start` downloads an executable. The helper runs on each MCP connection;
-the installed executable's hash is verified again before use.
+the installed executable's attestation is verified again before use.
 
 ## GitHub-attested download dependency
 
-The selected release-download direction requires GitHub CLI (`gh`) with
-`gh attestation verify` support. This authenticates release artifacts against
-our trusted GitHub repository and release workflow without managing a long-lived
-signing key. Attestation verification is not yet implemented in `chronicle.sh`;
-the pinned SHA256 behavior above remains the actual installer behavior.
+Release installation requires GitHub CLI (`gh`) with `gh attestation verify`
+support, including all flags above. The installer never installs or upgrades it.
+If missing or unsupported, the calling agent must ask the user for consent to
+install or upgrade through a trusted package manager or https://cli.github.com/.
+Explain the security purpose, proposed command, and any required privileges.
+Refusal blocks release setup. Approved development binaries need no verifier.
 
-The setup skill checks for the verifier and asks the user for permission before
-installing a missing CLI or upgrading an unsupported version. It explains the
-secure-download purpose and proposes a trusted package-manager installation,
-including any required privileges. Refusal blocks release setup, not a fallback
-to unverified downloads. Approved local development binaries need no verifier.
-Future download methods must retain verification and explicit dependency-install
-consent rather than silently downloading their own verifier.
+## Before upgrading the plugin
+
+While the old plugin/CLI is still available, use `/chronicle:teardown` or that
+old CLI's `status` and `stop` with the same state directory. Active work requires
+renewed explicit confirmation for `stop --force`. Then upgrade the plugin and
+run setup. A new CLI cannot stop an incompatible old daemon. If already upgraded,
+use the retained old executable explicitly, not the new plugin's stop helper.
+There is no upgrade engine or automatic shutdown in this installer.

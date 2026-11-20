@@ -46,7 +46,7 @@ test('plugin uses authenticated HTTP with a side-effect-free headers helper', as
     assert.doesNotMatch(skill, /allowed-tools:/);
   }
   assert.match(await read('skills/teardown/SKILL.md'), /renewed explicit confirmation/);
-  assert.equal(await read('scripts/release.tsv'), 'unreleased unreleased\n');
+  assert.equal(await read('scripts/release.tsv'), 'v0.2.1 attested\n');
 });
 
 async function fixture(t) {
@@ -64,6 +64,7 @@ const posix = { skip: !['linux', 'darwin'].includes(process.platform) };
 
 test('unreleased fails clearly without installing; explicit local development override forwards commands', posix, async t => {
   const f = await fixture(t);
+  await writeFile(path.join(f.dir, 'release.tsv'), 'unreleased unreleased\n');
   await assert.rejects(f.run(['start']), /unreleased/);
   await assert.rejects(access(f.data), { code: 'ENOENT' });
   const binary = path.join(f.dir, 'local executable');
@@ -141,4 +142,67 @@ test('unsupported platforms and malformed pins fail; CLI refusals propagate with
     });
   }
   assert.equal(await readFile(log, 'utf8'), 'start\nstop\n');
+});
+
+// No GitHub access or installed gh is needed: every verifier/download is mocked.
+test('attested releases require exact provenance, reverify cache, and never execute rejected bytes', posix, async t => {
+  const f = await fixture(t);
+  const mocks = path.join(f.dir, 'commands');
+  await mkdir(mocks);
+  const log = path.join(f.dir, 'verification');
+  const marker = path.join(f.dir, 'executed');
+  const artifact = path.join(f.dir, 'artifact');
+  await writeFile(artifact, '#!/bin/sh\nprintf "%s\\n" "$*" >> "$MARKER"\nprintf "%s\\n" "$@"\n');
+  await writeFile(path.join(mocks, 'curl'), `#!/bin/sh
+printf '%s\\n' "$*" >> "$DOWNLOAD_LOG"
+[ "\${DOWNLOAD_FAIL:-0}" = 0 ] || exit 22
+while [ "$1" != --output ]; do shift; done
+cp "$ARTIFACT" "$2"
+`, { mode: 0o700 });
+  await writeFile(path.join(mocks, 'gh'), `#!/bin/sh
+[ "$*" != 'attestation verify --help' ] || exit 0
+printf '%s\\n' "$*" >> "$VERIFY_LOG"
+[ "$1 $2" = 'attestation verify' ] || exit 1
+file=$3; shift 3
+[ "$*" = '--repo Emyrk/chronicle-mcp --signer-workflow Emyrk/chronicle-mcp/.github/workflows/release.yml --source-ref refs/tags/v0.2.1 --deny-self-hosted-runners' ] || exit 1
+[ "\${VERIFY_FAIL:-0}" = 0 ] || exit 1
+cmp "$file" "$ARTIFACT" || exit 1
+echo 'verified'
+`, { mode: 0o700 });
+  const env = { PATH: `${mocks}:${process.env.PATH}`, ARTIFACT: artifact, MARKER: marker,
+    VERIFY_LOG: log, DOWNLOAD_LOG: path.join(f.dir, 'downloads') };
+  const binary = path.join(f.data, 'bin/v0.2.1/chronicle-mcp');
+  await assert.rejects(f.run(['start'], { ...env, DOWNLOAD_FAIL: '1' }), /may not be published yet/);
+  await assert.rejects(access(marker), { code: 'ENOENT' });
+  await assert.rejects(f.run(['start'], { ...env, VERIFY_FAIL: '1' }), /attestation verification failed/);
+  await assert.rejects(access(binary), { code: 'ENOENT' });
+  await assert.rejects(access(marker), { code: 'ENOENT' });
+  assert.equal((await f.run(['start'], env)).stdout, 'start\n');
+  const downloads = await readFile(env.DOWNLOAD_LOG, 'utf8');
+  assert.match(downloads, /https:\/\/github.com\/Emyrk\/chronicle-mcp\/releases\/download\/v0.2.1\/chronicle-mcp-(linux|darwin)-(amd64|arm64)/);
+  assert.equal((await f.run(['headers'], env)).stdout, 'auth\nheaders\n');
+  const calls = await readFile(log, 'utf8');
+  assert.ok(calls.includes(binary), 'cached binary must be reverified');
+  await assert.rejects(f.run(['stop'], { ...env, VERIFY_FAIL: '1' }), /attestation verification failed/);
+  assert.equal(await readFile(marker, 'utf8'), 'start\nauth headers\n');
+  await writeFile(binary, '#!/bin/sh\necho compromised >> "$MARKER"\n');
+  await assert.rejects(f.run(['start'], env), /attestation verification failed/);
+  assert.equal(await readFile(marker, 'utf8'), 'start\nauth headers\n');
+  assert.equal(await readFile(env.DOWNLOAD_LOG, 'utf8'), downloads, 'never silently replace rejected cache');
+});
+
+test('missing or unsupported gh blocks setup and requests consent, without installing anything', posix, async t => {
+  const f = await fixture(t);
+  const mocks = path.join(f.dir, 'isolated commands');
+  await mkdir(mocks);
+  // Isolate PATH so the test also passes on hosts which have real gh installed.
+  for (const command of ['sh', 'uname', 'dirname']) {
+    const { stdout } = await exec('sh', ['-c', `command -v ${command}`]);
+    await symlink(stdout.trim(), path.join(mocks, command));
+  }
+  await assert.rejects(f.run(['start'], { PATH: mocks }), /Ask the user for consent to install/);
+  await assert.rejects(access(f.data), { code: 'ENOENT' });
+  await writeFile(path.join(mocks, 'gh'), '#!/bin/sh\nexit 1\n', { mode: 0o700 });
+  await assert.rejects(f.run(['start'], { PATH: mocks }), /consent to upgrade/);
+  await assert.rejects(access(f.data), { code: 'ENOENT' });
 });
