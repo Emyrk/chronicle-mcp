@@ -33,8 +33,11 @@ No release binaries are provided by this change.
 | `--agent-lease` | `5m` | Inactive agent session retention, positive and at most `24h` |
 | `stop --force` | false | Explicitly disconnect active agents and cancel pending calls |
 
-The defaults always allow browser origins `https://chronicleclassic.com` and
-`http://localhost:4000`. Wildcards, paths, and trailing slashes are invalid.
+The defaults allow HTTPS `chronicleclassic.com` and all its subdomains on the
+default HTTPS port, plus `http://localhost:4000`. Each allowed Origin is echoed
+exactly in CORS responses; page URLs must still match the requesting Origin.
+All these subdomains are trusted to bootstrap browser credentials. `--origin`
+adds one exact origin; wildcard flag values, paths, and trailing slashes are invalid.
 Use the same `--state-dir` on all commands when overriding it. On Linux, the
 default respects `XDG_CONFIG_HOME`, otherwise `$HOME/.config/chronicle-mcp`. On macOS
 it is `$HOME/Library/Application Support/chronicle-mcp`.

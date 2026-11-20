@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"reflect"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -150,8 +151,19 @@ func exactOrigin(s string) bool {
 	u, e := url.Parse(s)
 	return e == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" && u.User == nil && u.Path == "" && u.RawQuery == "" && u.Fragment == "" && s == u.Scheme+"://"+u.Host && !regexp.MustCompile(`\*`).MatchString(s)
 }
+
+// Trust only HTTPS Chronicle DNS names, not substring matches or arbitrary ports.
+var chronicleHost = regexp.MustCompile(`^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*chronicleclassic\.com$`)
+
 func (d *Daemon) allowed(s string) bool {
-	return s == "https://chronicleclassic.com" || s == "http://localhost:4000" || s == d.Config.Origin
+	if s == "http://localhost:4000" || s == d.Config.Origin {
+		return true
+	}
+	if !exactOrigin(s) {
+		return false
+	}
+	u, _ := url.Parse(s)
+	return u.Scheme == "https" && (u.Port() == "" || u.Port() == "443") && chronicleHost.MatchString(strings.ToLower(u.Hostname()))
 }
 func (d *Daemon) finishLocked(o outcome) {
 	if d.pending != nil {

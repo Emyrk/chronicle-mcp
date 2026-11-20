@@ -125,7 +125,8 @@ See [daemon configuration, security, protocol, and lifecycle](docs/daemon.md)
 for flags, session leases, state paths, and exact-origin browser configuration.
 The service defaults to loopback only and separates browser credentials from
 agent/control credentials. `--origin http://localhost:5173` permits a local Vite
-deployment; production defaults include `https://chronicleclassic.com`.
+deployment; production defaults allow HTTPS `chronicleclassic.com` and all its
+subdomains, including `https://octo.chronicleclassic.com`.
 
 ## Release packaging
 

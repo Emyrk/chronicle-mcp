@@ -659,3 +659,62 @@ func TestGETActivityAndSessionExpiryUseOneLease(t *testing.T) {
 		t.Fatalf("expired session resurrected: %d", res.StatusCode)
 	}
 }
+
+func TestChronicleSubdomainOrigins(t *testing.T) {
+	d, s := setup(t)
+	for _, tt := range []struct {
+		origin  string
+		allowed bool
+	}{
+		{"https://chronicleclassic.com", true},
+		{"https://octo.chronicleclassic.com", true},
+		{"https://preview.octo.chronicleclassic.com", true},
+		{"https://octo.chronicleclassic.com:443", true},
+		{"http://localhost:4000", true},
+		{"http://octo.chronicleclassic.com", false},
+		{"https://octo.chronicleclassic.com:8443", false},
+		{"https://evilchronicleclassic.com", false},
+		{"https://chronicleclassic.com.evil.test", false},
+		{"https://chronicleclassic.com@evil.test", false},
+		{"https://evil.test@octo.chronicleclassic.com", false},
+		{"https://.chronicleclassic.com", false},
+		{"https://-bad.chronicleclassic.com", false},
+		{"https://octo.chronicleclassic.com/path", false},
+		{"https://octo.chronicleclassic.com?query", false},
+		{"null", false},
+	} {
+		t.Run(tt.origin, func(t *testing.T) {
+			r, err := http.NewRequest(http.MethodOptions, s.URL+"/v1/connect", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.Header.Set("Origin", tt.origin)
+			r.Header.Set("Access-Control-Request-Method", "POST")
+			res, err := http.DefaultClient.Do(r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer res.Body.Close()
+			if tt.allowed {
+				if res.StatusCode != 204 || res.Header.Get("Access-Control-Allow-Origin") != tt.origin {
+					t.Fatalf("preflight not allowed: status=%d", res.StatusCode)
+				}
+			} else if res.StatusCode != 403 || res.Header.Get("Access-Control-Allow-Origin") != "" {
+				t.Fatalf("untrusted origin allowed: status=%d", res.StatusCode)
+			}
+		})
+	}
+	origin := "https://octo.chronicleclassic.com"
+	if code, _ := request(t, s, "", "POST", "/v1/connect", origin, map[string]any{"protocol": 2}); code != 200 {
+		t.Fatalf("subdomain bootstrap: %d", code)
+	}
+	hb := heartbeat()
+	hb["page"].(map[string]any)["url"] = origin + "/edit"
+	if code, _ := request(t, s, d.Token, "POST", "/v1/browser", origin, hb); code != 200 {
+		t.Fatalf("subdomain heartbeat: %d", code)
+	}
+	hb["page"].(map[string]any)["url"] = "https://other.chronicleclassic.com/edit"
+	if code, _ := request(t, s, d.Token, "POST", "/v1/browser", origin, hb); code != 400 {
+		t.Fatalf("cross-origin heartbeat must still fail: %d", code)
+	}
+}
