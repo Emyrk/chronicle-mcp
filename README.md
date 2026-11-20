@@ -100,7 +100,8 @@ use `serve` in the foreground rather than `start`.
 
 ### 4. Connect a browser
 
-Open Chronicle and click **Connect to local MCP**. Approve browser local-network
+Open https://choose.chronicleclassic.com/modules, open a module editor, and click
+**Connect to local MCP**. Approve browser local-network
 access if prompted. Each tab registers a named connection with its own ID. Tell
 the agent which connection to use; it lists connections, explicitly selects the
 ID, then calls `whereami` and fetches live page context and skills.

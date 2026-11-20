@@ -2,7 +2,6 @@ package relay
 
 import (
 	"embed"
-	"fmt"
 	"mime"
 	"net/http"
 	"strings"
@@ -28,13 +27,12 @@ func (d *Daemon) dashboard(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 	w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
 	w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-	expectedHost := fmt.Sprintf("127.0.0.1:%d", d.Config.Port)
-	if r.Host != expectedHost {
+	if !d.localHost(r.Host) {
 		fail(w, 403, "Invalid Host")
 		return
 	}
 	origins, present := r.Header["Origin"]
-	expectedOrigin := "http://" + expectedHost
+	expectedOrigin := "http://" + r.Host
 	if present && (len(origins) != 1 || origins[0] != expectedOrigin) {
 		fail(w, 403, "Dashboard requires its exact local origin")
 		return

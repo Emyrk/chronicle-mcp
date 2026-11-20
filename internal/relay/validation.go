@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -19,6 +20,12 @@ func exactOrigin(s string) bool {
 
 // Trust only HTTPS Chronicle DNS names, not substring matches or arbitrary ports.
 var chronicleHost = regexp.MustCompile(`^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*chronicleclassic\.com$`)
+
+// Accept only explicit loopback hostnames at this listener's port. Do not use
+// DNS resolution: arbitrary names resolving to loopback enable DNS rebinding.
+func (d *Daemon) localHost(host string) bool {
+	return host == fmt.Sprintf("127.0.0.1:%d", d.Config.Port) || host == fmt.Sprintf("localhost:%d", d.Config.Port)
+}
 
 func (d *Daemon) allowed(s string) bool {
 	if s == "http://localhost:4000" || s == "http://localhost:5175" || s == d.Config.Origin {

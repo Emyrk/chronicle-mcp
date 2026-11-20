@@ -12,8 +12,9 @@ it is not a local Lua project editor or a model provider.
    a tab. If unselected, call `list_connections` and ask the user which connection
    to use unless they already identified its ID or unique name. Explicitly call
    `select_connection` with `connection_id`, then `whereami` again. Do not auto-select
-   even a single tab. If no tabs exist, ask the user to click **Connect to local
-   MCP** in Chronicle. Only the four relay connection tools exist before selection.
+   even a single tab. If no tabs exist, ask the user to open
+   `https://choose.chronicleclassic.com/modules`, open a module editor, and click
+   **Connect to local MCP**. Only the four relay connection tools exist before selection.
 2. Discover the currently advertised MCP tools. Do not assume a tool exists
    because it is mentioned here. Client-visible names may include an MCP-server
    prefix; use the names your client exposes.

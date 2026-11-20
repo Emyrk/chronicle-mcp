@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -178,7 +177,7 @@ func reserved(name string) bool {
 	return name == "status" || name == "whereami" || name == "list_connections" || name == "select_connection" || name == "release_connection"
 }
 func (d *Daemon) newMCPServer() *mcp.Server {
-	s := mcp.NewServer(&mcp.Implementation{Name: "chronicle", Version: Version}, &mcp.ServerOptions{Instructions: "List connections and ask for an explicit user choice when unspecified. Select by connection ID, then call whereami, discover tools, and fetch gen_page_context and applicable list_skill/read_skill guidance. Neither discovery nor whereami acquires a tab. Refresh guidance after navigation. Browser approval is authoritative; never claim unsaved edits are persisted.", Capabilities: &mcp.ServerCapabilities{Tools: &mcp.ToolCapabilities{ListChanged: true}}, SupportedProtocolVersions: []string{"2025-11-25", "2025-06-18", "2025-03-26"}})
+	s := mcp.NewServer(&mcp.Implementation{Name: "chronicle", Version: Version}, &mcp.ServerOptions{Instructions: "If no browser tabs are connected, ask the user to open https://choose.chronicleclassic.com/modules, open a module editor, and click Connect to local MCP. List connections and ask for an explicit user choice when unspecified. Select by connection ID, then call whereami, discover tools, and fetch gen_page_context and applicable list_skill/read_skill guidance. Neither discovery nor whereami acquires a tab. Refresh guidance after navigation. Browser approval is authoritative; never claim unsaved edits are persisted.", Capabilities: &mcp.ServerCapabilities{Tools: &mcp.ToolCapabilities{ListChanged: true}}, SupportedProtocolVersions: []string{"2025-11-25", "2025-06-18", "2025-03-26"}})
 	for _, t := range relayTools() {
 		s.AddTool(t, func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) { return nil, nil })
 	}
@@ -549,7 +548,7 @@ func (d *Daemon) handle(w http.ResponseWriter, r *http.Request) {
 		d.dashboard(w, r)
 		return
 	}
-	if r.Host != fmt.Sprintf("127.0.0.1:%d", d.Config.Port) {
+	if !d.localHost(r.Host) {
 		fail(w, 403, "Invalid Host")
 		return
 	}

@@ -23,7 +23,7 @@ func TestHealthz(t *testing.T) {
 		{"unapproved", "GET", "https://evil.example", "", 403},
 		{"null", "GET", "null", "", 403},
 		{"bad host", "GET", "", "evil.example", 403},
-		{"localhost", "GET", "", fmt.Sprintf("localhost:%d", d.Config.Port), 403},
+		{"localhost", "GET", "", fmt.Sprintf("localhost:%d", d.Config.Port), 200},
 		{"mutation", "POST", "", "", 405},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

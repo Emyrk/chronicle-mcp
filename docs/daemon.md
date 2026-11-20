@@ -170,8 +170,7 @@ with `Cache-Control: no-store`. Check the service and protocol, not just HTTP 20
 It does not connect a tab, acquire ownership, or renew agent/daemon idle timers.
 The existing `/health` remains an authenticated management endpoint.
 
-The probe retains exact `127.0.0.1:<port>` Host validation (`localhost` is not an
-alias) and allows CORS only for approved Chronicle origins, including the exact
+The probe accepts only `127.0.0.1:<port>` or `localhost:<port>` Host values and allows CORS only for approved Chronicle origins, including the exact
 configured `--origin`. Approved-origin OPTIONS preflights are supported. No
 Authorization or `X-Chronicle-Client` header is needed:
 
@@ -192,8 +191,8 @@ cannot start a stopped daemon. Browser bootstrap still requires explicit connect
 ## Local dashboard
 
 `GET /` serves an embedded, unauthenticated dashboard on this same loopback
-listener. Use `http://127.0.0.1:<port>/`; `localhost` is not an alias for the
-exact Host policy. It displays safe inspection data plus uptime and provides
+listener. Use `http://127.0.0.1:<port>/` or `http://localhost:<port>/`.
+Only these exact Host values are accepted. It displays safe inspection data plus uptime and provides
 revision-pinned control revocation and confirmed shared shutdown. The dashboard
 is local administration, not browser workshop execution; it never saves or
 modifies module source.

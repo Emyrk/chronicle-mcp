@@ -14,7 +14,8 @@ schemas, assistant prompt, and skills; the browser owns source and save approval
 2. Call `whereami` with `{}` to inspect this agent's current selection. This is
    observation only and never acquires a tab. If no connection is selected,
    call `list_connections` with `{}`. If none are connected, ask the user to open
-   Chronicle and click **Connect to local MCP**. Otherwise match the user's
+   `https://choose.chronicleclassic.com/modules`, open a module editor, and click
+   **Connect to local MCP**. Otherwise match the user's
    explicitly requested connection ID or unique name; ask which connection to
    use if they have not identified one or the name is ambiguous, even with one
    available tab. Call `select_connection` with `{"connection_id":"<chosen id>"}`

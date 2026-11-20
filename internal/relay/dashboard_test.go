@@ -70,7 +70,7 @@ func TestDashboardReadSecurity(t *testing.T) {
 		}
 	}
 	req, _ := http.NewRequest("GET", s.URL+"/", nil)
-	req.Host = "localhost:" + strings.Split(s.URL, ":")[2]
+	req.Host = "localhost.evil.test:" + strings.Split(s.URL, ":")[2]
 	response, e := http.DefaultClient.Do(req)
 	if e != nil {
 		t.Fatal(e)
