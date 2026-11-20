@@ -4,13 +4,22 @@
   const state = byId('state'), service = byId('service'), connections = byId('connections');
   const refresh = byId('refresh'), shutdown = byId('shutdown'), message = byId('message');
   const dialog = byId('confirmation');
-  let timer, latest, failures = 0, stopped = false, busy = false, polling = false;
+  let timer, latest, failures = 0, stopped = false, busy = false, polling = false, suspended = false, lifecycle = 0;
   const text = (tag, value, className) => {
     const node = document.createElement(tag);
     node.textContent = String(value);
     if (className) node.className = className;
     return node;
   };
+  function duration(value) {
+    if (/^\d+(?:\.\d+)?(?:ms|µs|ns)$/.test(value)) return '0s';
+    const match = /^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+(?:\.\d+)?)s)?$/.exec(value);
+    if (!match || !match.slice(1).some(Boolean)) return value;
+    let seconds = Math.max(0, Math.floor(Number(match[1] || 0) * 3600 + Number(match[2] || 0) * 60 + Number(match[3] || 0)));
+    const hours = Math.floor(seconds / 3600); seconds %= 3600;
+    const minutes = Math.floor(seconds / 60); seconds %= 60;
+    return [hours ? `${hours}h` : '', minutes ? `${minutes}m` : '', `${seconds}s`].filter(Boolean).join(' ');
+  }
   function field(list, label, value) { list.append(text('dt', label), text('dd', value)); }
   async function request(path, body) {
     const controller = new AbortController();
@@ -37,9 +46,9 @@
     });
   }
   function enableActions() {
-    refresh.disabled = busy || polling;
-    shutdown.disabled = busy || stopped || !latest;
-    for (const button of connections.querySelectorAll('button')) button.disabled = busy || stopped || button.dataset.unowned === 'true';
+    refresh.disabled = busy || polling || suspended;
+    shutdown.disabled = busy || stopped || suspended || !latest;
+    for (const button of connections.querySelectorAll('button')) button.disabled = busy || stopped || suspended || !latest || button.dataset.unowned === 'true';
   }
   function render(data) {
     latest = data;
@@ -49,7 +58,7 @@
     field(service, 'Uptime', data.uptime);
     field(service, 'Agent sessions', data.agents);
     field(service, 'Pending operations', data.pending);
-    field(service, 'Idle shutdown', data.idle.disabled ? 'Disabled' : `${data.idle.remaining} remaining${data.idle.pendingCall ? ' · pending work prevents idle shutdown' : ''}`);
+    field(service, 'Idle shutdown', data.idle.disabled ? 'Disabled' : `${duration(data.idle.remaining)} remaining${data.idle.pendingCall ? ' · pending work prevents idle shutdown' : ''}`);
     field(service, 'Last agent activity', new Date(data.lastAgentActivity).toLocaleString());
     connections.replaceChildren();
     byId('empty').hidden = data.connections.length !== 0;
@@ -59,7 +68,12 @@
       card.append(text('h3', connection.name));
       const fields = document.createElement('dl');
       field(fields, 'Connection ID', connection.id);
-      field(fields, 'Owner', connection.owner ? `${connection.owner.name} (${connection.owner.version}) · ${connection.owner.id}` : 'Available');
+      field(fields, 'Owner', connection.owner ? `${connection.owner.name} (${connection.owner.version})` : 'Available');
+      if (connection.owner) {
+        fields.append(text('dt', 'Owner ID'));
+        const ownerID = text('dd', connection.owner.id.length > 16 ? `${connection.owner.id.slice(0, 12)}…` : connection.owner.id);
+        ownerID.title = connection.owner.id; fields.append(ownerID);
+      }
       field(fields, 'Pending work', connection.pending ? 'Yes' : 'None');
       field(fields, 'Ownership revision', connection.ownershipRevision);
       fields.append(text('dt', 'Page'));
@@ -76,24 +90,29 @@
     }
     enableActions();
   }
-  function schedule(delay) { clearTimeout(timer); if (!stopped) timer = setTimeout(poll, delay); }
+  function schedule(delay) { clearTimeout(timer); if (!stopped && !suspended) timer = setTimeout(poll, delay); }
   async function poll() {
-    if (polling || busy || stopped) return;
+    if (polling || busy || stopped || suspended) return;
+    const observedLifecycle = lifecycle;
     polling = true; enableActions();
     try {
       const data = await request('/dashboard/api/status');
-      if (stopped) return;
+      if (stopped || suspended || observedLifecycle !== lifecycle) return;
+      if (message.textContent.startsWith('Service unavailable:') || message.textContent.startsWith('Shutdown requested.')) message.textContent = '';
       render(data); failures = 0; schedule(2000);
     }
     catch (error) {
-      if (stopped) return;
+      if (stopped || suspended || observedLifecycle !== lifecycle) return;
       failures++; state.textContent = 'Offline'; latest = undefined;
       message.textContent = `Service unavailable: ${error.message}. ${failures >= 4 ? 'Automatic polling stopped. Use Refresh after restarting the daemon.' : 'Retrying briefly…'}`;
       if (failures >= 4) stopped = true; else schedule(Math.min(1000 * 2 ** failures, 8000));
-    } finally { polling = false; enableActions(); }
+    } finally {
+      polling = false; enableActions();
+      if (observedLifecycle !== lifecycle && !suspended && !stopped) schedule(0);
+    }
   }
   async function revokeConnection(connection) {
-    if (busy || stopped) return;
+    if (busy || stopped || suspended || !latest) return;
     busy = true; clearTimeout(timer); enableActions();
     try {
       if (!await confirm('Revoke agent control?', `Release ${connection.owner?.name || 'the agent'} from “${connection.name}”? Pending work and approvals will be canceled. Already-running mutations cannot be rolled back. Browser edits remain unchanged.`, 'Revoke control')) return;
@@ -103,7 +122,7 @@
     finally { busy = false; enableActions(); schedule(0); }
   }
   shutdown.addEventListener('click', async () => {
-    if (busy || stopped || !latest) return;
+    if (busy || stopped || suspended || !latest) return;
     busy = true; clearTimeout(timer); enableActions();
     const active = latest.agents > 0 || latest.pending > 0;
     try {
@@ -115,6 +134,15 @@
     finally { busy = false; enableActions(); if (!stopped) schedule(0); }
   });
   refresh.addEventListener('click', () => { if (busy || polling) return; stopped = false; failures = 0; clearTimeout(timer); poll(); });
-  window.addEventListener('pagehide', () => {stopped = true; clearTimeout(timer);});
+  window.addEventListener('pagehide', () => {
+    suspended = true; lifecycle++; latest = undefined; clearTimeout(timer); enableActions();
+  });
+  window.addEventListener('pageshow', () => {
+    if (!suspended) return;
+    suspended = false; enableActions();
+    // A BFCache restoration resumes inspection, not an intentional shutdown or
+    // exhausted retry loop. Any pre-hide response is discarded by lifecycle.
+    if (!stopped) schedule(0);
+  });
   poll();
 })();
