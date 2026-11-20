@@ -50,22 +50,30 @@ working copy. Editing them does not edit the user's module through MCP.
 
 ## Working on the relay
 
-- Read [README.md](README.md) for installation, exact-origin configuration,
-  protocol details, and troubleshooting. Node.js 22+ is required.
-- Start MCP through `node tools/cli.mjs mcp`; use the README's absolute-path
-  configuration in an MCP client. Stdout belongs exclusively to MCP protocol
-  traffic; send diagnostics to stderr.
-- The MCP process owns its loopback listener. Do not also start `npm run dev`.
-  Only one MCP process and one connected tab can use the default port 17643.
-  If occupied, report the conflict; do not kill an existing process without
-  user permission. Use ephemeral ports for isolated relay tests.
-- Keep `.chronicle/dev.json` private: it contains the session bearer token.
-  Never commit it or include its contents in reports.
+- Read [README.md](README.md) and [docs/daemon.md](docs/daemon.md) for the Go
+  daemon, CLI, exact-origin configuration, and protocol. Go 1.25+ builds it;
+  Node.js 22+ is only needed for legacy regression and installer tests.
+- Start the shared service with `chronicle start` or foreground `chronicle serve`.
+  Agents connect over authenticated HTTP at `http://127.0.0.1:17643/mcp`.
+  `chronicle auth headers` is a private credential helper, not a chat command:
+  never capture or display its output in reports.
+- Do not also start the legacy Node relay on the same port. Reuse only a verified
+  compatible daemon; report unrelated port conflicts and incompatible versions.
+  Never silently kill or upgrade another service. Use ephemeral ports and
+  temporary state directories in tests.
+- Keep daemon `dev.json` in its per-user state directory private, along with
+  legacy `.chronicle/dev.json`. They contain bearer credentials.
+- `whereami` claims browser ownership for an agent session; tools/list does not.
+  If another agent owns it, report the conflict rather than taking over.
+  Browser ownership UI and tray support are follow-ups.
 - Preserve dynamic discovery, page/session invalidation, cancellation, and
   browser-owned validation and approval. Do not add fixed tool catalogs or
   filesystem-based module synchronization to the relay.
-- Run `npm test` and `git diff --check` after changes. Protocol changes need
-  coverage in `test/`, including the MCP stdio integration where relevant.
+- Run `go test -race ./...`, `go vet ./...`, `npm test`, and `git diff --check`
+  after changes. Cover Go protocol/lifecycle changes in `internal/` tests;
+  retain legacy Node and installer coverage in `test/`. Do not publish fabricated
+  release artifacts or checksums: use an explicit local development binary until
+  a real pinned release exists.
 
 This file guides agents that read the checkout. MCP clients do not automatically
 load repository `AGENTS.md` files; initialization instructions and the live

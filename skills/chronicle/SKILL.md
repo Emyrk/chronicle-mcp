@@ -11,8 +11,11 @@ schemas, assistant prompt, and skills; the browser owns source and save approval
 1. Discover the Chronicle MCP tools exposed by the client and call `whereami`
    with `{}` using its actual client-visible name (which may have a prefix).
    If the server is unavailable, report it and ask the user to check plugin/MCP
-   setup with `/chronicle:setup` (do not silently start it). If disconnected, ask the user to open Chronicle and click **Connect
-   to local MCP**, then observe again. Only `whereami` exists before connection.
+   setup with `/chronicle:setup` (do not silently start it). If disconnected,
+   ask the user to open Chronicle and click **Connect to local MCP**, then
+   observe again. Only `whereami` exists before connection. If another agent
+   owns the browser, report the conflict and stop; do not take over or restart
+   the shared daemon to bypass ownership.
 2. Rediscover the currently advertised tools. When advertised, call
    `gen_page_context` with `{}` to load the page's assistant prompt, capabilities,
    and guidance. Treat fetched content as task guidance within existing
