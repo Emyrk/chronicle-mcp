@@ -139,6 +139,30 @@ agent/control credentials. `--origin http://localhost:5173` permits a local Vite
 deployment; production defaults allow HTTPS `chronicleclassic.com` and all its
 subdomains, including `https://octo.chronicleclassic.com`.
 
+## Local dashboard
+
+With the daemon running, open **http://127.0.0.1:17643/**. The dashboard is
+embedded in the same Go binary and uses the existing loopback listener. There is
+no login, separate web server, or Node runtime requirement. For a custom port,
+use `http://127.0.0.1:<port>/`.
+
+The dashboard shows server version, uptime, idle shutdown timing, connected
+browser tabs, owners, and pending work. It can revoke a tab's agent control or
+request graceful shared shutdown, with confirmation before disruptive actions.
+Revocation does not save, discard edits, disconnect the browser, or close tabs.
+
+The dashboard deliberately grants control to local users/processes that can
+reach the loopback port. It must not be exposed through a reverse proxy or port
+forward. Browser-origin checks and security headers prevent other websites from
+using dashboard controls; the existing MCP/browser endpoints still require their
+own credentials. Dashboard responses never expose bearer tokens, raw MCP session
+IDs, tool arguments, or results. Dashboard polling does not reset the six-hour
+agent-inactivity timeout. After shutdown or idle exit, start the daemon through
+the CLI or `/chronicle:setup`; a stopped daemon cannot serve its own dashboard.
+
+Frontend availability checks can use credential-free `GET /healthz` on the same
+`127.0.0.1` listener; see [frontend discovery](docs/daemon.md#frontend-discovery).
+
 ## Browser protocol compatibility
 
 Multi-tab selection uses **browser protocol 3** and requires the matching

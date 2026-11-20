@@ -1,0 +1,58 @@
+/* Theme tokens from Chronicle frontend/chronicle/src/index.css (:root).
+   Bundled assets keep the local dashboard independent of the website. */
+@font-face{font-family:Inter;src:url('/dashboard/inter-400.woff2') format('woff2');font-weight:400;font-display:swap}
+@font-face{font-family:Inter;src:url('/dashboard/inter-600.woff2') format('woff2');font-weight:600;font-display:swap}
+:root{
+  --background:oklch(0.2891 0 0);
+  --foreground:oklch(0.9300 0.0035 247.8602);
+  --card:oklch(0.2686 0 0);
+  --primary:#5F8FA6;
+  --primary-darker:oklch(0.3818 0.0603 233.7748);
+  --muted-foreground:oklch(0.7593 0.0073 67.7161);
+  --destructive:oklch(0.6368 0.2078 25.3313);
+  --border:oklch(0.3407 0 0);
+  --ring:oklch(0.5204 0.0833 232.6334);
+  --link:oklch(0.7 0.15 240);
+  --radius:0.2rem;
+  color-scheme:dark;font:16px/1.55 Inter,ui-sans-serif,sans-serif,system-ui;
+  background:var(--background);color:var(--foreground)
+}
+*{box-sizing:border-box}
+body{margin:0}
+main{max-width:960px;margin:0 auto;padding:3rem 1.25rem}
+header,.section-heading,.actions{display:flex;justify-content:space-between;align-items:center;gap:1rem}
+h1{font-size:2rem;margin:0}
+h2{font-size:1.15rem;margin:0 0 .8rem}
+h3{font-size:1.1rem;margin:0;overflow-wrap:anywhere}
+.eyebrow{font-size:.75rem;letter-spacing:.15em;color:var(--primary);margin:0 0 .35rem}
+.intro,footer{color:var(--muted-foreground)}
+section,.connection{border:1px solid var(--border);border-radius:var(--radius);padding:1.2rem;margin:1.4rem 0;background:var(--card)}
+.connection{background:var(--background);margin:.8rem 0}
+.badge{border:1px solid var(--primary);border-radius:2rem;padding:.25rem .7rem;font-size:.85rem}
+dl{display:grid;grid-template-columns:minmax(8rem,1fr) 3fr;gap:.4rem 1rem;margin:0}
+dt{color:var(--muted-foreground)}
+dd{margin:0;overflow-wrap:anywhere}
+button{font:inherit;cursor:pointer;color:var(--foreground);background:var(--primary-darker);border:1px solid var(--primary);border-radius:var(--radius);padding:.45rem .8rem}
+button:hover{background:var(--ring)}
+button:disabled{opacity:.5;cursor:not-allowed}
+a{color:var(--link);overflow-wrap:anywhere}
+.danger{border-color:var(--destructive)}
+.danger button,#confirm-action{background:#592d37;border-color:var(--destructive)}
+#message{min-height:1.6rem;white-space:pre-wrap;overflow-wrap:anywhere}
+footer{font-size:.8rem;margin-top:2rem}
+dialog{background:var(--card);color:var(--foreground);border:1px solid var(--primary);border-radius:var(--radius);padding:1.5rem;max-width:32rem;width:calc(100% - 2rem)}
+dialog::backdrop{background:#000a}
+dialog p{overflow-wrap:anywhere}
+.actions{justify-content:flex-end;margin-top:1.5rem}
+@media(max-width:520px){main{padding-top:1.5rem}
+dl{grid-template-columns:1fr}
+dd{margin-bottom:.4rem}
+header{align-items:flex-start}
+}
+
+
+h1,h2,h3{font-weight:600}
+.brand{display:flex;align-items:center;gap:1.5rem;min-width:0}
+.logo{display:block;width:220px;height:auto;max-width:100%;flex-shrink:0}
+button:focus-visible,a:focus-visible{outline:2px solid var(--primary);outline-offset:3px}
+@media(max-width:640px){header{flex-wrap:wrap}.brand{flex-direction:column;align-items:flex-start;gap:.75rem}.logo{width:180px}h1{font-size:1.6rem}}

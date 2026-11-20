@@ -23,7 +23,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const Version = "0.2.0"
+const Version = "0.2.1"
 const Protocol = 3
 const bodyLimit = 128 << 10
 
@@ -133,6 +133,7 @@ type Daemon struct {
 	agents            map[string]*agent
 	now               func() time.Time
 	lastActivity      time.Time
+	startedAt         time.Time
 	mcpHTTP           *mcp.StreamableHTTPHandler
 	shutdown          chan struct{}
 	stopOnce          sync.Once
@@ -157,7 +158,7 @@ func New(c Config) (*Daemon, error) {
 	if c.IdleTimeout < 0 || c.AgentLease <= 0 || c.AgentLease > 24*time.Hour {
 		return nil, errors.New("idle timeout must be nonnegative; agent lease must be >0 and <=24h")
 	}
-	d := &Daemon{Config: c, Token: secret(), AgentToken: secret(), connections: map[string]*connection{}, agents: map[string]*agent{}, now: time.Now, lastActivity: time.Now(), shutdown: make(chan struct{}), callTimeout: 60 * time.Second}
+	d := &Daemon{Config: c, Token: secret(), AgentToken: secret(), connections: map[string]*connection{}, agents: map[string]*agent{}, now: time.Now, lastActivity: time.Now(), startedAt: time.Now(), shutdown: make(chan struct{}), callTimeout: 60 * time.Second}
 	// Each MCP session gets its own server for targeted catalog notifications. The
 	// relay alone owns inactivity leases, including GET keepalives and pending calls.
 	d.mcpHTTP = mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return d.newMCPServer() }, &mcp.StreamableHTTPOptions{})
@@ -544,6 +545,10 @@ func (w *bufferedResponse) Write(b []byte) (int, error) {
 	return w.body.Write(b)
 }
 func (d *Daemon) handle(w http.ResponseWriter, r *http.Request) {
+	if dashboardPath(r.URL.Path) {
+		d.dashboard(w, r)
+		return
+	}
 	if r.Host != fmt.Sprintf("127.0.0.1:%d", d.Config.Port) {
 		fail(w, 403, "Invalid Host")
 		return
@@ -567,6 +572,25 @@ func (d *Daemon) handle(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Chronicle-Client")
 		w.Header().Set("Access-Control-Allow-Private-Network", "true")
 		w.WriteHeader(204)
+		return
+	}
+	// Discovery is credential-free but retains the exact Host and approved-Origin
+	// guards above. It neither allocates a connection nor renews agent activity.
+	if r.URL.Path == "/healthz" {
+		w.Header().Set("Cache-Control", "no-store")
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", "GET, OPTIONS")
+			fail(w, http.StatusMethodNotAllowed, "Health probe requires GET")
+			return
+		}
+		d.mu.Lock()
+		closed := d.closed
+		d.mu.Unlock()
+		if closed {
+			fail(w, http.StatusServiceUnavailable, "Relay stopped")
+			return
+		}
+		respond(w, http.StatusOK, map[string]any{"service": "chronicle", "version": Version, "protocol": Protocol})
 		return
 	}
 	control := r.URL.Path == "/mcp" || r.URL.Path == "/health" || r.URL.Path == "/shutdown"
