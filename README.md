@@ -87,17 +87,25 @@ use `serve` in the foreground rather than `start`.
 ### 4. Connect a browser
 
 Open Chronicle and click **Connect to local MCP**. Approve browser local-network
-access if prompted. Ask the agent to call `whereami`, then fetch the live page
-context and relevant skills. Only `whereami` exists before a browser connects.
+access if prompted. Each tab registers a named connection with its own ID. Tell
+the agent which connection to use; it lists connections, explicitly selects the
+ID, then calls `whereami` and fetches live page context and skills.
 
-`whereami` claims an unowned browser for that agent session. Automatic tool
-listing does not claim ownership. Another agent can connect to the daemon, but
-cannot operate an owned tab. Agent sessions expire after five minutes without
-activity by default; clients should send MCP pings to retain their session.
+`whereami` only observes the agent's selection. It never acquires a tab, even if
+only one is connected. Each agent can own one tab and each tab has at most one
+owner. Release the current connection before selecting another. Only the four
+connection-management tools exist before selection; page tools come from the
+selected tab, never from a combined catalog.
+
+Browser UI can rename a connection, show its owner, revoke control, or disconnect
+without closing the module. Navigation invalidates page observations but does
+not select another tab. Full reload/reconnect creates a new connection and
+requires explicit selection again. Agent sessions expire after five minutes
+without activity by default; clients should send MCP pings to retain control.
 
 Edits stay in the browser working copy. Saving requires browser approval and
 never implicitly publishes a release. Stopping the daemon does not close the
-browser or discard those edits. Tray and browser ownership UI are follow-ups.
+browser or discard those edits. Tray UI is a follow-up.
 
 ## Headless service and other MCP clients
 
@@ -130,6 +138,14 @@ The service defaults to loopback only and separates browser credentials from
 agent/control credentials. `--origin http://localhost:5173` permits a local Vite
 deployment; production defaults allow HTTPS `chronicleclassic.com` and all its
 subdomains, including `https://octo.chronicleclassic.com`.
+
+## Browser protocol compatibility
+
+Multi-tab selection uses **browser protocol 3** and requires the matching
+Chronicle frontend. Protocol 2 clients receive an upgrade error; the daemon
+never falls back to routing calls to an arbitrary tab. See the
+[multi-connection contract](docs/multi-connections.md) for ownership, revocation,
+and stale-operation guarantees.
 
 ## Release packaging
 
