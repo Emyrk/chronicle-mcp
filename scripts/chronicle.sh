@@ -1,6 +1,7 @@
 #!/bin/sh
 # POSIX installer/launcher. release.tsv is trusted, reviewed plugin metadata,
 # never a checksum downloaded alongside an untrusted artifact.
+# Production releases require GitHub build provenance before any execution.
 set -eu
 umask 077
 fail() { printf '%s\n' "chronicle-mcp: $*" >&2; exit 1; }
@@ -19,16 +20,23 @@ if [ -n "${CHRONICLE_DEV_BINARY:-}" ]; then
 fi
 root=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
 read -r version state < "$root/release.tsv"
-[ "$state" = released ] || fail 'this plugin release is unreleased; no trusted artifacts exist. Build locally and explicitly set CHRONICLE_DEV_BINARY, or install a released plugin.'
+case "$state" in attested|released) ;; *) fail 'this plugin release is unreleased; no trusted artifacts exist. Build locally and explicitly set CHRONICLE_DEV_BINARY, or install a released plugin.' ;; esac
 case "$version" in ''|*[!a-zA-Z0-9._-]*|.|..) fail 'invalid pinned version' ;; esac
-entry=$(awk -v platform="$os-$arch" 'NR > 1 && $1 == platform { print $2 " " $3; n++ } END { if (n != 1) exit 1 }' "$root/release.tsv") || fail 'platform has no unique pinned artifact'
-url=${entry% *}; digest=${entry##* }
-[ "${#digest}" -eq 64 ] || fail 'invalid pinned SHA256'
-case "$digest" in *[!0-9a-f]*) fail 'invalid pinned SHA256' ;; esac
-case "$url" in https://*) ;; http://127.0.0.1:*)
-  [ "${CHRONICLE_TEST_ALLOW_HTTP:-}" = 1 ] || fail 'artifact requires HTTPS' ;;
-  *) fail 'artifact requires HTTPS' ;;
-esac
+if [ "$state" = attested ]; then
+  url="https://github.com/Emyrk/chronicle-mcp/releases/download/$version/chronicle-mcp-$os-$arch"
+  command -v gh >/dev/null 2>&1 || fail 'GitHub CLI (gh) is required for release verification. Ask the user for consent to install it from a trusted package manager; never bypass verification.'
+  gh attestation verify --help >/dev/null 2>&1 || fail 'gh attestation verify is unavailable. Ask the user for consent to upgrade GitHub CLI from a trusted source.'
+else
+  # Legacy bundled hash metadata is retained for local regression fixtures.
+  entry=$(awk -v platform="$os-$arch" 'NR > 1 && $1 == platform { print $2 " " $3; n++ } END { if (n != 1) exit 1 }' "$root/release.tsv") || fail 'platform has no unique pinned artifact'
+  url=${entry% *}; digest=${entry##* }
+  [ "${#digest}" -eq 64 ] || fail 'invalid pinned SHA256'
+  case "$digest" in *[!0-9a-f]*) fail 'invalid pinned SHA256' ;; esac
+  case "$url" in https://*) ;; http://127.0.0.1:*)
+    [ "${CHRONICLE_TEST_ALLOW_HTTP:-}" = 1 ] || fail 'artifact requires HTTPS' ;;
+    *) fail 'artifact requires HTTPS' ;;
+  esac
+fi
 data=${CLAUDE_PLUGIN_DATA:-}
 case "$data" in /*) ;; *) fail 'CLAUDE_PLUGIN_DATA must be an absolute private directory' ;; esac
 # Reject traversal and symlink components, including existing ancestors.
@@ -55,6 +63,17 @@ hash() {
   elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}'
   else fail 'sha256sum or shasum is required'; fi
 }
+verify() {
+  if [ "$state" = attested ]; then
+    # Keep verifier output off stdout: headers is a private JSON protocol.
+    gh attestation verify "$1" --repo Emyrk/chronicle-mcp \
+      --signer-workflow Emyrk/chronicle-mcp/.github/workflows/release.yml \
+      --source-ref "refs/tags/$version" --deny-self-hosted-runners >&2 ||
+      fail 'artifact attestation verification failed; refusing execution. Check network/authentication and gh support for the required flags; ask user consent before upgrading gh. No unverified fallback is allowed.'
+  else
+    [ "$(hash "$1")" = "$digest" ] || fail "$2 SHA256 mismatch; refusing execution (remove it explicitly to reinstall)"
+  fi
+}
 if [ ! -f "$bin" ]; then
   [ "$action" = start ] || fail 'pinned binary is not installed; run setup first'
   lock=$data/.install-lock
@@ -66,14 +85,14 @@ if [ ! -f "$bin" ]; then
   command -v curl >/dev/null 2>&1 || fail 'curl is required'
   # HTTPS redirects only; loopback HTTP is an explicit test-only escape hatch.
   protocols='=https'
-  [ "${CHRONICLE_TEST_ALLOW_HTTP:-}" != 1 ] || protocols='=http,https'
-  curl --fail --silent --show-error --location --proto "$protocols" --proto-redir "$protocols" --connect-timeout 15 --max-time 120 --output "$tmp" "$url"
-  [ "$(hash "$tmp")" = "$digest" ] || fail 'artifact SHA256 mismatch; refusing execution'
+  [ "$state" != released ] || [ "${CHRONICLE_TEST_ALLOW_HTTP:-}" != 1 ] || protocols='=http,https'
+  curl --fail --silent --show-error --location --proto "$protocols" --proto-redir "$protocols" --connect-timeout 15 --max-time 120 --output "$tmp" "$url" || fail "could not download pinned release $version; it may not be published yet. No fallback is allowed."
+  verify "$tmp" artifact
   chmod 700 "$tmp"
   mv -- "$tmp" "$bin"
   tmp=
   rmdir -- "$lock"
   trap - 0 HUP INT TERM
 fi
-[ "$(hash "$bin")" = "$digest" ] || fail 'installed binary SHA256 mismatch; refusing execution (remove it explicitly to reinstall)'
+verify "$bin" 'installed binary'
 exec "$bin" "$action" "$@"

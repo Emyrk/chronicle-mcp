@@ -29,22 +29,31 @@ install or start anything automatically.
 
 ### 2. Set up the shared daemon
 
+**Secure-download prerequisite:** GitHub CLI (`gh`) with `gh attestation verify`
+support is required for the GitHub-attested release download method.
+The setup agent must ask your permission before installing or upgrading it,
+explain that it verifies release authenticity for security, and use a trusted
+package-manager installation. Declining leaves release setup blocked; it must
+not fall back to unverified downloads. See [GitHub CLI installation](https://cli.github.com/).
+Explicit local development builds do not require `gh`. Verification requires
+network access and a CLI supporting all required attestation policy flags.
+
 Run `/chronicle:setup` and approve the setup command. The installer downloads only
-the version pinned in `scripts/release.tsv`, verifies its bundled SHA256, and
+the version pinned in `scripts/release.tsv`, verifies GitHub build provenance, and
 stores the executable in `${CLAUDE_PLUGIN_DATA}/bin/<version>/chronicle-mcp`. It checks
-the hash again before every invocation. A checksum fetched alongside an artifact
-is not trusted. Existing compatible services are reused by the CLI; setup never
+provenance again before every invocation, pinning the repository, release workflow,
+exact source tag, and GitHub-hosted runners. A downloaded checksum alone is not trusted. Existing compatible services are reused by the CLI; setup never
 silently stops or upgrades a running daemon. Resolve an occupied port or version
 conflict explicitly rather than killing the listener.
 
-**Release status: unreleased.** No artifacts or checksums have been published or
-invented. Setup fails closed until maintainers ship reviewed release metadata.
+**Release pin: v0.2.1.** This pin does not claim an existing published release.
+Setup fails closed until the tagged release publishes binaries and attestations.
 For local development, build the Go CLI and explicitly set `CHRONICLE_DEV_BINARY`
 to its absolute path in the environment used to launch Claude Code. This is an
 opt-in, unverified local executable, not an integrity-verified release install.
 
 The installer supports **Linux and macOS, amd64 and arm64**, using POSIX `sh`,
-`curl`, and `sha256sum` or `shasum`. Native Windows installation is not implemented;
+`curl`, and GitHub CLI (`gh`). Native Windows installation is not implemented;
 the Go binary cross-builds, but Windows daemon locking/startup are also
 currently unsupported. Do not run the POSIX plugin
 installer in a Windows environment and assume it installed a native binary.
@@ -59,6 +68,11 @@ Use `/chronicle:teardown` for graceful shared shutdown. It checks status and ask
 for approval; active clients/work require an additional explicit confirmation
 before `stop --force`. Stopping affects every connected agent, not just this
 plugin. Uninstalling the plugin is not a daemon shutdown operation.
+
+**Before upgrading the plugin**, tear down with the old plugin/CLI first, then
+upgrade and run setup. The new CLI cannot stop an incompatible old daemon. If
+already upgraded, use the retained old executable explicitly with the same state
+directory and user approval. There is no automatic upgrade engine.
 
 Do not enable a second Chronicle MCP entry alongside the plugin, or start the
 legacy `npm run dev` listener on port 17643. MCP configuration lives in
@@ -173,10 +187,11 @@ and stale-operation guarantees.
 
 ## Release packaging
 
-`scripts/release.tsv` pins a release version and raw executable URLs/SHA256s for
-Linux/macOS amd64/arm64. It deliberately remains `unreleased` until real binaries
-are published. The installer verifies hashes before execution, rejects unsafe
-paths, and stores binaries outside the replaceable plugin installation.
+`scripts/release.tsv` pins v0.2.1 and GitHub-attested raw executables for
+Linux/macOS amd64/arm64. The installer verifies provenance before execution,
+rejects unsafe paths, and stores binaries outside the replaceable plugin
+installation. See [release metadata and verification policy](scripts/README.md)
+and the [release publishing procedure](docs/releases.md).
 No hook or background auto-installer runs when loading the plugin.
 
 ## Development and validation
@@ -197,5 +212,5 @@ artifacts; Node is a test dependency, not a Go daemon runtime dependency.
 
 The [legacy Node relay documentation](docs/legacy-node-relay.md), `tools/`, Lua
 starter, `project.json`, and `lua-types/` remain as references. They do not edit
-the connected browser's working copy. No tray UI or release publication is
+the connected browser's working copy. No tray UI is
 included yet.

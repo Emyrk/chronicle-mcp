@@ -20,7 +20,9 @@ not an automatic kill or upgrade. Detached startup logs are discarded; use
 `serve` for diagnostic errors. A startup timeout does not kill an unverified
 process. Linux, macOS, and BSD are supported. Windows builds, but daemon state
 locking and detached startup are currently unsupported and fail explicitly.
-No release binaries are provided by this change.
+See [publishing executable releases](releases.md) for the four-platform build,
+GitHub attestation verification, and explicit upgrade procedure. A configured
+release pin is usable only after its tag workflow publishes the artifacts.
 
 ## Flags and state
 
