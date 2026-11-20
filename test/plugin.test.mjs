@@ -17,8 +17,8 @@ test('plugin uses standard component locations and a thin discoverable skill', a
   const manifest = JSON.parse(await read('.claude-plugin/plugin.json'));
   assert.equal(manifest.name, 'chronicle');
   assert.match(manifest.version, /^\d+\.\d+\.\d+$/);
-  // Default discovery avoids duplicate registration or hidden hooks/agents.
-  for (const key of ['skills', 'mcpServers', 'hooks', 'agents']) assert.equal(manifest[key], undefined);
+  // Skills use default discovery; MCP is explicit to avoid project registration.
+  for (const key of ['skills', 'hooks', 'agents']) assert.equal(manifest[key], undefined);
   for (const dir of ['hooks', 'agents']) {
     await assert.rejects(access(path.join(root, dir)), { code: 'ENOENT' });
   }
@@ -31,7 +31,10 @@ test('plugin uses standard component locations and a thin discoverable skill', a
 });
 
 test('plugin uses authenticated HTTP with a side-effect-free headers helper', async () => {
-  const config = JSON.parse(await read('.mcp.json'));
+  const manifest = JSON.parse(await read('.claude-plugin/plugin.json'));
+  assert.equal(manifest.mcpServers, './plugin.mcp.json');
+  await assert.rejects(access(path.join(root, '.mcp.json')), { code: 'ENOENT' });
+  const config = JSON.parse(await read(manifest.mcpServers));
   assert.deepEqual(config, { mcpServers: { 'chronicle-mcp': {
     type: 'http', url: 'http://127.0.0.1:17643/mcp',
     headersHelper: 'CLAUDE_PLUGIN_DATA="${CLAUDE_PLUGIN_DATA}" sh "${CLAUDE_PLUGIN_ROOT}/scripts/chronicle.sh" headers',

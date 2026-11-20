@@ -61,9 +61,11 @@ before `stop --force`. Stopping affects every connected agent, not just this
 plugin. Uninstalling the plugin is not a daemon shutdown operation.
 
 Do not enable a second Chronicle MCP entry alongside the plugin, or start the
-legacy `npm run dev` listener on port 17643. When opening this checkout itself,
-do not also approve its `.mcp.json` as a project server: the headers helper uses
-plugin-specific path variables.
+legacy `npm run dev` listener on port 17643. MCP configuration lives in
+`plugin.mcp.json`, explicitly referenced by the plugin manifest, so opening this
+checkout does not also register a project MCP server. If you previously enabled
+a separate project/user `chronicle-mcp` entry, disable it and use the plugin
+entry `plugin:chronicle:chronicle-mcp` instead.
 
 ### 3. Build and test locally before the first release
 
