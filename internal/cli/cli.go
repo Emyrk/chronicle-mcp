@@ -156,8 +156,14 @@ func checkHealth(ctx context.Context, s state) (health, error) {
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&h); err != nil {
 		return h, errors.New("invalid daemon health response")
 	}
-	if h.Service != "chronicle" || h.Version != relay.Version || h.Protocol != 2 || s.Version != relay.Version {
-		return h, errors.New("incompatible daemon identity, version, or protocol; refusing reuse")
+	if h.Service != "chronicle" {
+		return h, errors.New("incompatible daemon identity; refusing reuse")
+	}
+	if h.Protocol != relay.Protocol {
+		return h, fmt.Errorf("incompatible daemon protocol %d (requires %d); explicitly stop the old daemon using its matching CLI, upgrade and restart chronicle-mcp; no daemon was stopped", h.Protocol, relay.Protocol)
+	}
+	if h.Version != relay.Version || s.Version != relay.Version {
+		return h, errors.New("incompatible daemon version; explicitly stop the old daemon using its matching CLI, upgrade and restart chronicle-mcp; no daemon was stopped")
 	}
 	if h.Origin != s.Origin || h.IdleTimeout != s.IdleTimeout.String() || h.AgentLease != s.AgentLease.String() {
 		return h, errors.New("daemon configuration does not match private state; refusing reuse")

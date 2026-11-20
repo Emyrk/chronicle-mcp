@@ -2,7 +2,7 @@
 
 The Go daemon replaces the per-client Node listener with one headless loopback
 service. Existing Node sources and tests remain as regression references. It
-uses the official Go MCP SDK v1.8.0, verified against the module registry, and
+implements browser protocol 3 as daemon version 0.2.0. It uses the official Go MCP SDK v1.8.0, verified against the module registry, and
 requires Go 1.25 or newer to build:
 
 ```sh
@@ -42,16 +42,20 @@ Use the same `--state-dir` on all commands when overriding it. On Linux, the
 default respects `XDG_CONFIG_HOME`, otherwise `$HOME/.config/chronicle-mcp`. On macOS
 it is `$HOME/Library/Application Support/chronicle-mcp`.
 
-The directory is mode 0700 and `dev.json` is mode 0600. It contains separate
-browser and agent bearer tokens, listener port, version, and configuration.
+The directory is mode 0700 and `dev.json` is mode 0600. It contains the agent bearer token, a private state-cleanup marker, listener port,
+version, and configuration. Browser credentials are separate per-tab tokens held
+only in daemon memory and returned to that tab during bootstrap.
 Never share or commit it. A daemon lock prevents competing writers. State is
 atomically written, symlink paths are refused, and shutdown removes only the
-state belonging to that daemon. `status` emits health JSON without credentials. It includes the connected browser
-page URL, ownership busy state and owner client name/version, last agent activity,
-and the idle deadline and remaining duration. Raw MCP/browser session identifiers
-are omitted. A disabled idle timer has `disabled: true` and no deadline. A
-`pendingCall` flag explains why an elapsed idle deadline cannot yet stop the daemon.
-Client names are self-reported, not authenticated identities.
+state belonging to that daemon. `status` emits health JSON without credentials:
+`connections` contains safe IDs, names, page URLs, ownership revisions, availability,
+pending-work indicators, and public owner identity. It also includes aggregate
+agent/pending counts, last agent activity, and idle deadline/remaining duration.
+Raw MCP/browser page session identifiers, tool arguments, and results are omitted.
+A disabled idle timer has `disabled: true` and no deadline. `pendingCall` explains
+why an elapsed idle deadline cannot yet stop the daemon. Owner IDs are independent
+public opaque IDs, not MCP session IDs; names and versions are bounded untrusted
+client display text, not authenticated identities.
 `stop` uses authenticated HTTP, not a recorded PID. Active sessions or calls
 require `--force`; shutdown never invokes a save or erases browser working files.
 
@@ -72,17 +76,34 @@ connecting. A restart rotates credentials and clients must reconnect. Clients
 must support stateful Streamable HTTP and send `Mcp-Session-Id` as required by
 MCP. Multiple clients can initialize and discover tools concurrently.
 
-`tools/list` observes the current browser catalog but does **not** claim it.
-An explicit `whereami` claims an unowned connected browser for that agent session
-and reports `ownership.owned` and `ownership.busy`. Browser tool calls require
-that claim; another session receives an error, never implicit takeover. Ownership
-ends on MCP DELETE/disconnect, bounded inactivity lease expiry, browser lease
-expiry, or daemon shutdown. A disconnected TCP request alone is not a reliable
-session-close signal. Clients should DELETE their MCP session on exit and send
-MCP pings more frequently than `--agent-lease` while they want to retain it.
-A silent SSE connection is not an indefinite ownership lease. The relay owns the
-single session inactivity clock and closes the MCP SDK session when its lease
-expires; SDK timers cannot expire a GET-renewed session behind that clock.
+Four relay tools are always advertised, even without a connected browser:
+
+1. `list_connections {}` lists live tabs without selecting or observing a page.
+2. `select_connection {"connection_id":"..."}` explicitly acquires an available
+   tab. Ask the user to choose when unspecified; duplicate names need an ID.
+3. `whereami {}` observes only the selected tab, never acquiring a tab.
+4. `release_connection {"connection_id":"..."}` releases only that selection.
+
+There is no automatic selection, even with exactly one tab. Selecting a busy or
+absent connection cannot change an existing selection; switching requires explicit
+release first. Re-selecting the same owned connection is idempotent. Selection
+alone does not authorize browser tools: explicitly observe with `whereami` or
+`tools/list`, then fetch current page guidance and skills. Each agent sees only
+its selected tab's dynamic catalog. Tool-list notifications target affected
+agents and do not update their observations.
+
+An agent can select one tab, and a tab has at most one owner. Different tabs have
+independent pending calls. Release, revoke, disconnect, lease expiry, and shutdown
+cancel only the corresponding work and invalidate its observation. Browser
+ownership revisions increase on every acquisition/release to reject stale results
+and approvals even after the same agent reacquires the same tab. Cancellation is
+not rollback of a browser mutation that already ran.
+
+Clients should DELETE their MCP session on exit and send pings more frequently
+than `--agent-lease` while retaining it. A silent TCP/SSE connection is not an
+indefinite ownership lease. The relay owns one session inactivity clock for both
+GET and POST and closes the SDK session when it expires. Agent expiry releases
+the tab but does not disconnect its browser.
 
 All authenticated activity from a known connected agent, including pings and
 HTTP keepalive requests, renews its activity. Browser heartbeats, status/health
@@ -91,8 +112,8 @@ agents remain. Pending tool calls pin their agent ownership and prevent idle
 exit, but retain the existing 60-second call deadline. The browser still has a
 10-second heartbeat lease. The daemon checks idle/lease expiry once per second.
 
-Tools and their JSON schemas come from the browser, not a local catalog. Only
-`whereami` exists while disconnected. Tool lists and explicit `whereami` capture
+Dynamic tools and their JSON schemas come from the browser, not a local catalog.
+The four relay tools exist while disconnected. Tool lists and explicit `whereami` capture
 page/session/capability observations. Notifications never refresh observations.
 Navigation invalidates pending calls, and delayed calls against changed state
 fail stale until the client explicitly observes again. Approval/rejection and
@@ -101,14 +122,32 @@ any non-success status.
 
 ## Browser compatibility and management endpoints
 
-Browser protocol 2 preserves `/v1/connect`, `/v1/browser`, `/v1/state`, and
-`/v1/status`, including original request/response fields, body bounds, exact
-origins, Host validation, private-network preflights, capability pinning, and
-late-result handling. The bootstrap route returns only the browser credential.
-It cannot grant MCP or management access. The old internal Node `/v1/call` route
-is intentionally not exposed: calls now enter through authenticated MCP session
-ownership, not a sessionless bypass. Browser mutations, validation, previews,
-and save approval still execute entirely in Chronicle.
+[The protocol 3 contract](multi-connections.md) defines the exact browser wire
+format. Version 0.2.0 does not silently downgrade to protocol 2; bootstrap returns
+an actionable upgrade error. CLI compatibility rejects protocol 2 daemons without
+stopping them. Explicitly stop/upgrade an old daemon with its matching CLI.
+
+- `POST /v1/connect` requires approved Origin and `{protocol:3,clientId}`. It
+  returns a fresh 64-hex token bound to that client ID and exact Origin. Duplicate
+  active IDs return 409; unused allocations expire after ten seconds.
+- All browser routes require that token, matching `X-Chronicle-Client`, and exact
+  bootstrap Origin. Body client IDs must also match. Tokens cannot operate on
+  another tab, MCP, or management endpoints.
+- `POST /v1/browser` adds a trimmed, nonempty name of at most 80 Unicode code
+  points. Heartbeat responses return connection/owner/revision metadata. Results
+  must echo the command's original ownership revision, not the current one.
+- `GET /v1/state` returns only that connection and at most one pending command.
+  Different tabs can execute independently. Browser `/v1/status` is scoped too.
+- `POST /v1/browser/revoke` accepts `expectedOwnershipRevision`. A stale revision
+  returns 409 with fresh top-level `connection` metadata; do not retry automatically.
+- `POST /v1/browser/disconnect` removes only that tab and invalidates its token.
+  Reconnect with a fresh client ID; ownership is never restored automatically.
+
+The 128-KiB request and 64-KiB result bounds, exact Origin/Host validation,
+private-network preflights, capability pinning, and late-result rules remain.
+Unknown or stale results return `resultAccepted:false` without unpairing a healthy
+tab. Browser validation, previews, mutations, and save approval remain entirely
+in Chronicle. The legacy sessionless Node `/v1/call` route is not exposed.
 
 Authenticated agent-only `GET /health` returns service `chronicle`, version,
 protocol, number of agents/pending calls, and effective timing/origin config.

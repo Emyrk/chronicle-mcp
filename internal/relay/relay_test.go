@@ -10,9 +10,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 type authTransport struct{ token string }
@@ -31,24 +33,23 @@ func setup(t *testing.T) (*Daemon, *httptest.Server) {
 	s := httptest.NewUnstartedServer(d.Handler())
 	d.Config.Port = s.Listener.Addr().(*net.TCPAddr).Port
 	s.Start()
-	t.Cleanup(func() {
-		for sess := range d.server.Sessions() {
-			_ = sess.Close()
-		}
-		s.Close()
-	})
+	t.Cleanup(func() { d.closeSessions(); s.Close() })
 	return d, s
 }
-func request(t *testing.T, s *httptest.Server, token, method, path, origin string, body any) (int, map[string]any) {
+func request(t *testing.T, s *httptest.Server, token, id, method, path, origin string, body any) (int, map[string]any) {
 	t.Helper()
 	b, _ := json.Marshal(body)
 	r, _ := http.NewRequest(method, s.URL+path, bytes.NewReader(b))
 	if origin != "" {
 		r.Header.Set("Origin", origin)
 	}
-	r.Header.Set("Authorization", "Bearer "+token)
+	if token != "" {
+		r.Header.Set("Authorization", "Bearer "+token)
+	}
+	if id != "" {
+		r.Header.Set("X-Chronicle-Client", id)
+	}
 	r.Header.Set("Content-Type", "application/json")
-	r.Header.Set("X-Chronicle-Client", "tab")
 	res, e := http.DefaultClient.Do(r)
 	if e != nil {
 		t.Fatal(e)
@@ -58,8 +59,40 @@ func request(t *testing.T, s *httptest.Server, token, method, path, origin strin
 	_ = json.NewDecoder(res.Body).Decode(&v)
 	return res.StatusCode, v
 }
-func heartbeat() map[string]any {
-	return map[string]any{"clientId": "tab", "page": map[string]any{"url": "http://localhost:4000/edit#private", "generation": "g1", "sessionId": "p1"}, "tools": []any{map[string]any{"name": "edit", "description": "Browser-owned editing", "inputSchema": map[string]any{"type": "object", "additionalProperties": true, "properties": map[string]any{"value": map[string]any{"oneOf": []any{map[string]any{"type": "string"}, map[string]any{"type": "number"}}}}}, "capability": map[string]any{"id": "cap", "version": 1, "stateRevision": 0}, "effect": "view_mutation", "confirmation": "unless_yolo"}}}
+func heartbeat(id, name, tool string) map[string]any {
+	return map[string]any{"clientId": id, "name": name, "page": map[string]any{"url": "http://localhost:4000/edit#private", "generation": "g1", "sessionId": "page-" + id}, "tools": []any{map[string]any{"name": tool, "description": "Browser-owned tool", "inputSchema": map[string]any{"type": "object", "properties": map[string]any{"value": map[string]any{"oneOf": []any{map[string]any{"type": "string"}, map[string]any{"type": "number"}}}}, "additionalProperties": true}, "capability": map[string]any{"id": "cap-" + id, "version": 1, "stateRevision": 0}, "effect": "view_mutation", "confirmation": "unless_yolo"}}}
+}
+
+type tab struct {
+	id, token, origin string
+	hb                map[string]any
+}
+
+func connect(t *testing.T, s *httptest.Server, id, tool string) *tab {
+	t.Helper()
+	code, result := request(t, s, "", "", "POST", "/v1/connect", "http://localhost:4000", map[string]any{"protocol": 3, "clientId": id})
+	if code != 200 {
+		t.Fatalf("bootstrap %d %v", code, result)
+	}
+	token := result["token"].(string)
+	if len(token) != 64 || strings.Trim(token, "0123456789abcdef") != "" {
+		t.Fatal("invalid bootstrap credential shape")
+	}
+	b := &tab{id, token, "http://localhost:4000", heartbeat(id, "same-name", tool)}
+	b.beat(t, s)
+	return b
+}
+func (b *tab) req(t *testing.T, s *httptest.Server, method, path string, body any) (int, map[string]any) {
+	t.Helper()
+	return request(t, s, b.token, b.id, method, path, b.origin, body)
+}
+func (b *tab) beat(t *testing.T, s *httptest.Server) map[string]any {
+	t.Helper()
+	code, v := b.req(t, s, "POST", "/v1/browser", b.hb)
+	if code != 200 {
+		t.Fatalf("heartbeat %d %v", code, v)
+	}
+	return v
 }
 func client(t *testing.T, d *Daemon, s *httptest.Server, notify chan struct{}) *mcp.ClientSession {
 	t.Helper()
@@ -72,7 +105,7 @@ func client(t *testing.T, d *Daemon, s *httptest.Server, notify chan struct{}) *
 			}
 		}
 	}
-	c := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, options)
+	c := mcp.NewClient(&mcp.Implementation{Name: "test-agent", Version: "1"}, options)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	session, e := c.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: s.URL + "/mcp", HTTPClient: &http.Client{Transport: authTransport{d.AgentToken}}, MaxRetries: -1}, nil)
@@ -99,10 +132,17 @@ func eventually(t *testing.T, condition func() bool) {
 		}
 	}
 }
-func pending(t *testing.T, d *Daemon) *command {
+func pending(t *testing.T, d *Daemon, id string) *command {
 	t.Helper()
 	var c *command
-	eventually(t, func() bool { d.mu.Lock(); defer d.mu.Unlock(); c = d.pending; return c != nil })
+	eventually(t, func() bool {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		if b := d.connections[id]; b != nil {
+			c = b.pending
+		}
+		return c != nil
+	})
 	return c
 }
 func awaitResult(t *testing.T, ch <-chan *mcp.CallToolResult) *mcp.CallToolResult {
@@ -118,153 +158,403 @@ func awaitResult(t *testing.T, ch <-chan *mcp.CallToolResult) *mcp.CallToolResul
 		return nil
 	}
 }
-func callAsync(c *mcp.ClientSession, ctx context.Context) <-chan *mcp.CallToolResult {
+func callAsync(c *mcp.ClientSession, ctx context.Context, name string) <-chan *mcp.CallToolResult {
 	ch := make(chan *mcp.CallToolResult, 1)
 	go func() {
-		r, _ := c.CallTool(ctx, &mcp.CallToolParams{Name: "edit", Arguments: map[string]any{"value": "hi"}})
+		r, _ := c.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: map[string]any{"value": "hello"}})
 		ch <- r
 	}()
 	return ch
 }
 func resultText(r *mcp.CallToolResult) string { return r.Content[0].(*mcp.TextContent).Text }
-
-func TestMCPBrowserLifecycle(t *testing.T) {
-	d, s := setup(t)
-	notifications := make(chan struct{}, 10)
-	a := client(t, d, s, notifications)
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	list, e := a.ListTools(ctx, nil)
-	if e != nil || len(list.Tools) != 1 {
-		t.Fatalf("disconnected list: %v %v", list, e)
+func call(t *testing.T, c *mcp.ClientSession, name string, args map[string]any) *mcp.CallToolResult {
+	if args == nil {
+		args = map[string]any{}
 	}
-	hb := heartbeat()
-	if code, _ := request(t, s, d.Token, "POST", "/v1/browser", "http://localhost:4000", hb); code != 200 {
-		t.Fatalf("heartbeat %d", code)
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	r, e := c.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
+	if e != nil {
+		t.Fatal(e)
+	}
+	return r
+}
+func value(t *testing.T, r *mcp.CallToolResult) map[string]any {
+	t.Helper()
+	var v map[string]any
+	if e := json.Unmarshal([]byte(resultText(r)), &v); e != nil {
+		t.Fatal(e)
+	}
+	return v
+}
+func selectTab(t *testing.T, c *mcp.ClientSession, id string, observe bool) {
+	t.Helper()
+	r := call(t, c, "select_connection", map[string]any{"connection_id": id})
+	if r.IsError {
+		t.Fatal(resultText(r))
+	}
+	if observe {
+		r = call(t, c, "whereami", nil)
+		if r.IsError {
+			t.Fatal(resultText(r))
+		}
+	}
+}
+func checkTools(t *testing.T, c *mcp.ClientSession, want string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	list, e := c.ListTools(ctx, nil)
+	if e != nil {
+		t.Fatal(e)
+	}
+	n := 4
+	if want != "" {
+		n++
+	}
+	if len(list.Tools) != n {
+		t.Fatalf("tool count %d want%d", len(list.Tools), n)
+	}
+	if want != "" {
+		if list.Tools[4].Name != want {
+			t.Fatalf("wrong selected catalog: %s", list.Tools[4].Name)
+		}
+		b, _ := json.Marshal(list.Tools[4].InputSchema)
+		if !bytes.Contains(b, []byte("oneOf")) {
+			t.Fatal("schema modified")
+		}
+	}
+}
+func (b *tab) result(t *testing.T, s *httptest.Server, c *command, revision uint64, status string) bool {
+	t.Helper()
+	b.hb["result"] = map[string]any{"id": c.ID, "generation": c.Generation, "ownershipRevision": revision, "result": map[string]any{"status": status, "result": map[string]any{"message": "browser-defined"}, "extra": 42}}
+	response := b.beat(t, s)
+	delete(b.hb, "result")
+	return response["resultAccepted"] == true
+}
+
+func TestTwoBrowsersTwoAgentsRouting(t *testing.T) {
+	d, s := setup(t)
+	aTab := connect(t, s, "tab-a", "edit_a")
+	bTab := connect(t, s, "tab-b", "edit_b")
+	a := client(t, d, s, nil)
+	b := client(t, d, s, nil)
+	listed := value(t, call(t, a, "list_connections", nil))["connections"].([]any)
+	if len(listed) != 2 {
+		t.Fatal(listed)
+	}
+	for _, item := range listed {
+		m := item.(map[string]any)
+		if m["name"] != "same-name" || m["availability"] != "available" || m["owner"] != nil {
+			t.Fatal(m)
+		}
+	}
+	checkTools(t, a, "")
+	checkTools(t, b, "")
+	for _, c := range []*mcp.ClientSession{a, b} {
+		where := value(t, call(t, c, "whereami", nil))
+		if where["selectedConnection"] != nil || where["connected"] != false || where["page"] != nil {
+			t.Fatal("implicit selection", where)
+		}
+	}
+	selectTab(t, a, aTab.id, false)
+	unobserved := call(t, a, "edit_a", map[string]any{})
+	if !unobserved.IsError || !strings.Contains(resultText(unobserved), "stale_state") {
+		t.Fatal("selection authorized unobserved execution")
+	}
+	selectTab(t, b, bTab.id, true)
+	checkTools(t, a, "edit_a")
+	checkTools(t, b, "edit_b")
+	idempotent := value(t, call(t, a, "select_connection", map[string]any{"connection_id": aTab.id}))["connection"].(map[string]any)
+	if idempotent["ownershipRevision"] != float64(1) {
+		t.Fatal("idempotent select incremented revision")
+	}
+	failed := call(t, a, "select_connection", map[string]any{"connection_id": bTab.id})
+	if !failed.IsError || value(t, failed)["error"] != "already_selected" {
+		t.Fatal("switch did not require release")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	aCall := callAsync(a, ctx, "edit_a")
+	bCall := callAsync(b, ctx, "edit_b")
+	ac := pending(t, d, aTab.id)
+	bc := pending(t, d, bTab.id)
+	concurrent := call(t, a, "edit_a", map[string]any{})
+	if !concurrent.IsError || !strings.Contains(resultText(concurrent), "already pending") {
+		t.Fatal("concurrent call accepted on one connection")
+	}
+	for _, pair := range []struct {
+		tab *tab
+		cmd *command
+	}{{aTab, ac}, {bTab, bc}} {
+		code, state := pair.tab.req(t, s, "GET", "/v1/state", nil)
+		commands := state["commands"].([]any)
+		if code != 200 || len(commands) != 1 || commands[0].(map[string]any)["id"] != pair.cmd.ID || state["connection"].(map[string]any)["owner"] == nil {
+			t.Fatalf("cross-tab routing: %d %v", code, state)
+		}
+	}
+	if aTab.result(t, s, bc, bc.OwnershipRevision, "success") {
+		t.Fatal("cross-tab result accepted")
+	}
+	if !aTab.result(t, s, ac, ac.OwnershipRevision, "rejected") {
+		t.Fatal("approval rejection not accepted")
+	}
+	r := awaitResult(t, aCall)
+	if !r.IsError || !strings.Contains(resultText(r), "browser-defined") {
+		t.Fatal("approval rejection lost")
+	}
+	if !bTab.result(t, s, bc, bc.OwnershipRevision, "success") {
+		t.Fatal("success rejected")
+	}
+	r = awaitResult(t, bCall)
+	if r.IsError || !strings.Contains(resultText(r), `"extra":42`) {
+		t.Fatal("continuation modified")
+	}
+	// A release only cancels that tab and removes only its selected catalog.
+	aCall = callAsync(a, ctx, "edit_a")
+	bCall = callAsync(b, ctx, "edit_b")
+	pending(t, d, aTab.id)
+	bc = pending(t, d, bTab.id)
+	if r = call(t, a, "release_connection", map[string]any{"connection_id": aTab.id}); r.IsError {
+		t.Fatal(resultText(r))
+	}
+	if !awaitResult(t, aCall).IsError {
+		t.Fatal("released pending call succeeded")
+	}
+	checkTools(t, a, "")
+	checkTools(t, b, "edit_b")
+	if !bTab.result(t, s, bc, bc.OwnershipRevision, "success") {
+		t.Fatal("other tab affected by release")
+	}
+	awaitResult(t, bCall)
+	selectTab(t, a, aTab.id, true)
+	aCall = callAsync(a, ctx, "edit_a")
+	pending(t, d, aTab.id)
+	bCall = callAsync(b, ctx, "edit_b")
+	bc = pending(t, d, bTab.id)
+	deleteReq, _ := http.NewRequest("DELETE", s.URL+"/mcp", nil)
+	deleteReq.Header.Set("Authorization", "Bearer "+d.AgentToken)
+	deleteReq.Header.Set("Mcp-Session-Id", a.ID())
+	deleteResponse, e := http.DefaultClient.Do(deleteReq)
+	if e != nil {
+		t.Fatal(e)
+	}
+	deleteResponse.Body.Close()
+	if deleteResponse.StatusCode != http.StatusNoContent {
+		t.Fatalf("DELETE status %d", deleteResponse.StatusCode)
 	}
 	select {
-	case <-notifications:
+	case <-aCall:
 	case <-ctx.Done():
-		t.Fatal("missing list changed")
+		t.Fatal("disconnect did not cancel")
 	}
-	list, e = a.ListTools(ctx, nil)
-	if e != nil || len(list.Tools) != 2 {
-		t.Fatalf("connected list: %v %v", list, e)
+	eventually(t, func() bool {
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		return d.connections[aTab.id].owner == "" && d.connections[aTab.id].pending == nil
+	})
+	if !bTab.result(t, s, bc, bc.OwnershipRevision, "success") {
+		t.Fatal("agent disconnect affected other tab")
 	}
-	schema, _ := json.Marshal(list.Tools[1].InputSchema)
-	if !bytes.Contains(schema, []byte("oneOf")) {
-		t.Fatal("schema lost")
-	}
-	if _, e = a.CallTool(ctx, &mcp.CallToolParams{Name: "whereami"}); e != nil {
-		t.Fatal(e)
-	}
+	awaitResult(t, bCall)
+}
+
+func TestConcurrentClaimsRevokeAndRevision(t *testing.T) {
+	d, s := setup(t)
+	tab := connect(t, s, "shared", "edit")
+	a := client(t, d, s, nil)
 	b := client(t, d, s, nil)
-	if _, e = b.ListTools(ctx, nil); e != nil {
-		t.Fatal(e)
+	start := make(chan struct{})
+	results := make(chan struct {
+		session *mcp.ClientSession
+		r       *mcp.CallToolResult
+	}, 2)
+	var wg sync.WaitGroup
+	for _, c := range []*mcp.ClientSession{a, b} {
+		wg.Add(1)
+		go func(c *mcp.ClientSession) {
+			defer wg.Done()
+			<-start
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			r, _ := c.CallTool(ctx, &mcp.CallToolParams{Name: "select_connection", Arguments: map[string]any{"connection_id": tab.id}})
+			results <- struct {
+				session *mcp.ClientSession
+				r       *mcp.CallToolResult
+			}{c, r}
+		}(c)
 	}
-	busy, e := b.CallTool(ctx, &mcp.CallToolParams{Name: "edit", Arguments: map[string]any{}})
-	if e != nil || !busy.IsError || !strings.Contains(resultText(busy), "Another agent") {
-		t.Fatalf("ownership not enforced: %v %v", busy, e)
+	close(start)
+	wg.Wait()
+	close(results)
+	var winner, loser *mcp.ClientSession
+	for result := range results {
+		if result.r == nil {
+			t.Fatal("transport error")
+		}
+		if result.r.IsError {
+			loser = result.session
+		} else {
+			winner = result.session
+		}
 	}
-	ch := callAsync(a, ctx)
-	c := pending(t, d)
-	code, state := request(t, s, d.Token, "GET", "/v1/state", "http://localhost:4000", nil)
-	if code != 200 || len(state["commands"].([]any)) != 1 {
-		t.Fatalf("state %d %v", code, state)
+	if winner == nil || loser == nil {
+		t.Fatal("claim was not exclusive")
 	}
-	hb["result"] = map[string]any{"id": c.ID, "generation": "g1", "result": map[string]any{"status": "rejected", "result": map[string]any{"message": "approval denied"}}}
-	code, ack := request(t, s, d.Token, "POST", "/v1/browser", "http://localhost:4000", hb)
-	if code != 200 || ack["resultAccepted"] != true {
-		t.Fatalf("result %d %v", code, ack)
+	call(t, winner, "whereami", nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	ch := callAsync(winner, ctx, "edit")
+	cmd := pending(t, d, tab.id)
+	code, response := tab.req(t, s, "POST", "/v1/browser/revoke", map[string]any{"expectedOwnershipRevision": cmd.OwnershipRevision})
+	if code != 200 || response["connection"].(map[string]any)["owner"] != nil {
+		t.Fatal(code, response)
 	}
-	if r := awaitResult(t, ch); !r.IsError || !strings.Contains(resultText(r), "approval denied") {
-		t.Fatalf("rejection lost: %v", r)
+	if !awaitResult(t, ch).IsError {
+		t.Fatal("revoked operation succeeded")
 	}
-	delete(hb, "result")
-	ch = callAsync(a, ctx)
-	c = pending(t, d)
-	hb["page"].(map[string]any)["generation"] = "g2"
-	request(t, s, d.Token, "POST", "/v1/browser", "http://localhost:4000", hb)
-	if r := awaitResult(t, ch); !r.IsError || !strings.Contains(resultText(r), "stale_state") {
-		t.Fatal("navigation did not invalidate")
+	checkTools(t, winner, "")
+	selectTab(t, loser, tab.id, true)
+	code, response = tab.req(t, s, "POST", "/v1/browser/revoke", map[string]any{"expectedOwnershipRevision": cmd.OwnershipRevision})
+	if code != 409 || response["connection"].(map[string]any)["ownershipRevision"] != float64(3) {
+		t.Fatal("stale revoke affected new owner", code, response)
 	}
-	hb["result"] = map[string]any{"id": c.ID, "generation": "g1", "result": map[string]any{"status": "success"}}
-	_, ack = request(t, s, d.Token, "POST", "/v1/browser", "http://localhost:4000", hb)
-	if ack["resultAccepted"] != false {
-		t.Fatal("late result accepted")
+	if tab.result(t, s, cmd, cmd.OwnershipRevision, "success") {
+		t.Fatal("revoked late result accepted")
 	}
-	stale, e := a.CallTool(ctx, &mcp.CallToolParams{Name: "edit", Arguments: map[string]any{}})
-	if e != nil || !stale.IsError || !strings.Contains(resultText(stale), "stale_state") {
+	ch = callAsync(loser, ctx, "edit")
+	newCmd := pending(t, d, tab.id)
+	if tab.result(t, s, newCmd, cmd.OwnershipRevision, "success") {
+		t.Fatal("old revision accepted for current command")
+	}
+	if !tab.result(t, s, newCmd, newCmd.OwnershipRevision, "success") {
+		t.Fatal("current result rejected")
+	}
+	awaitResult(t, ch)
+	if r := call(t, winner, "release_connection", map[string]any{"connection_id": tab.id}); !r.IsError {
+		t.Fatal("delayed release evicted new owner")
+	}
+	call(t, loser, "release_connection", map[string]any{"connection_id": tab.id})
+	selectTab(t, loser, tab.id, false)
+	if r := call(t, loser, "edit", map[string]any{}); !r.IsError || !strings.Contains(resultText(r), "stale_state") {
+		t.Fatal("reacquisition retained observation")
+	}
+}
+
+func TestNavigationCapabilitiesCancellationAndNotifications(t *testing.T) {
+	d, s := setup(t)
+	tab := connect(t, s, "tab", "edit")
+	notify := make(chan struct{}, 10)
+	a := client(t, d, s, notify)
+	selectTab(t, a, tab.id, true)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	select {
+	case <-notify:
+	case <-ctx.Done():
+		t.Fatal("missing selected catalog notification")
+	}
+	ch := callAsync(a, ctx, "edit")
+	cmd := pending(t, d, tab.id)
+	tab.hb["page"].(map[string]any)["sessionId"] = "new-page"
+	tab.beat(t, s)
+	select {
+	case <-notify:
+	case <-ctx.Done():
+		t.Fatal("missing navigation catalog notification")
+	}
+	r := awaitResult(t, ch)
+	if !r.IsError || !strings.Contains(resultText(r), "stale_state") {
+		t.Fatal("navigation not invalidated")
+	}
+	if tab.result(t, s, cmd, cmd.OwnershipRevision, "success") {
+		t.Fatal("old page result accepted")
+	}
+	r = call(t, a, "edit", map[string]any{})
+	if !r.IsError {
 		t.Fatal("notification refreshed observation")
 	}
-	if _, e = a.CallTool(ctx, &mcp.CallToolParams{Name: "whereami"}); e != nil {
-		t.Fatal(e)
+	checkTools(t, a, "edit")
+	tab.hb["tools"].([]any)[0].(map[string]any)["capability"].(map[string]any)["stateRevision"] = 1
+	tab.beat(t, s)
+	r = call(t, a, "edit", map[string]any{})
+	if !r.IsError || !strings.Contains(resultText(r), "stale_state") {
+		t.Fatal("capability revision not pinned")
+	}
+	call(t, a, "whereami", nil)
+	// Renaming is metadata only and must not release or invalidate the observation.
+	tab.hb["name"] = "  renamed 🙂  "
+	metadata := tab.beat(t, s)["connection"].(map[string]any)
+	if metadata["name"] != "renamed 🙂" || metadata["ownershipRevision"] != float64(1) {
+		t.Fatal(metadata)
 	}
 	callCtx, stop := context.WithCancel(ctx)
-	ch = callAsync(a, callCtx)
-	pending(t, d)
+	ch = callAsync(a, callCtx, "edit")
+	pending(t, d, tab.id)
 	stop()
 	select {
 	case <-ch:
 	case <-ctx.Done():
-		t.Fatal("cancel stuck")
+		t.Fatal("cancellation stuck")
 	}
-	eventually(t, func() bool { d.mu.Lock(); defer d.mu.Unlock(); return d.pending == nil })
-	if e = a.Close(); e != nil {
-		t.Fatal(e)
+	eventually(t, func() bool { d.mu.Lock(); defer d.mu.Unlock(); return d.connections[tab.id].pending == nil })
+	code, _ := tab.req(t, s, "POST", "/v1/browser/disconnect", map[string]any{})
+	if code != 200 {
+		t.Fatal(code)
 	}
-	eventually(t, func() bool { d.mu.Lock(); defer d.mu.Unlock(); return d.owner == "" })
-	if _, e = b.ListTools(ctx, nil); e != nil {
-		t.Fatal(e)
-	}
-	d.mu.Lock()
-	owner := d.owner
-	d.mu.Unlock()
-	if owner != "" {
-		t.Fatal("tools/list claimed ownership")
-	}
-	if _, e = b.CallTool(ctx, &mcp.CallToolParams{Name: "whereami"}); e != nil {
-		t.Fatal(e)
-	}
-	d.mu.Lock()
-	owner = d.owner
-	d.mu.Unlock()
-	if owner != b.ID() {
-		t.Fatalf("ownership not transferred: %s", owner)
+	checkTools(t, a, "")
+	code, _ = tab.req(t, s, "GET", "/v1/state", nil)
+	if code != 401 {
+		t.Fatal("disconnected token valid", code)
 	}
 }
 
-func TestSecurityAndValidation(t *testing.T) {
+func TestScopedAuthenticationAndValidation(t *testing.T) {
 	d, s := setup(t)
-	cases := []struct {
-		name, token, method, path, origin string
-		body                              any
-		want                              int
-	}{
-		{"bootstrap", "", "POST", "/v1/connect", "http://localhost:4000", map[string]any{"protocol": 2}, 200},
-		{"bootstrap-no-origin", "", "POST", "/v1/connect", "", map[string]any{"protocol": 2}, 403},
-		{"evil-origin", d.Token, "GET", "/v1/status", "https://evil.test", nil, 403},
-		{"missing-auth", "", "GET", "/v1/status", "", nil, 401},
-		{"browser-cannot-control", d.Token, "GET", "/health", "", nil, 401},
-		{"browser-cannot-mcp", d.Token, "POST", "/mcp", "", nil, 401},
-		{"agent-origin", d.AgentToken, "GET", "/health", "http://localhost:4000", nil, 403},
-		{"agent-health", d.AgentToken, "GET", "/health", "", nil, 200},
-		{"state-before-heartbeat", d.Token, "GET", "/v1/state", "http://localhost:4000", nil, 409},
-		{"oversize", d.Token, "POST", "/v1/browser", "", strings.Repeat("x", bodyLimit), 413},
+	a := connect(t, s, "a", "edit_a")
+	b := connect(t, s, "b", "edit_b")
+	code, v := request(t, s, "", "", "POST", "/v1/connect", a.origin, map[string]any{"protocol": 2})
+	if code != 400 || v["error"] != "upgrade_required" || !strings.Contains(v["message"].(string), "protocol 3") {
+		t.Fatal(code, v)
 	}
-	for _, tt := range cases {
-		t.Run(tt.name, func(t *testing.T) {
-			code, v := request(t, s, tt.token, tt.method, tt.path, tt.origin, tt.body)
-			if code != tt.want {
-				t.Fatalf("got %d %v want%d", code, v, tt.want)
-			}
-			if tt.path == "/health" && code == 200 {
-				b, _ := json.Marshal(v)
-				if bytes.Contains(b, []byte(d.AgentToken)) || bytes.Contains(b, []byte(d.Token)) {
-					t.Fatal("health leaked credentials")
-				}
-			}
-		})
+	code, _ = request(t, s, "", "", "POST", "/v1/connect", a.origin, map[string]any{"protocol": 3, "clientId": a.id})
+	if code != 409 {
+		t.Fatal("duplicate client ID accepted")
+	}
+	for _, path := range []string{"/v1/state", "/v1/status", "/v1/browser/revoke", "/v1/browser/disconnect"} {
+		method := "GET"
+		if strings.Contains(path, "browser/") {
+			method = "POST"
+		}
+		code, _ = request(t, s, a.token, b.id, method, path, a.origin, map[string]any{"expectedOwnershipRevision": 0})
+		if code != 401 {
+			t.Fatalf("cross-tab auth %s %d", path, code)
+		}
+	}
+	code, _ = request(t, s, a.token, a.id, "POST", "/v1/browser", a.origin, b.hb)
+	if code != 403 {
+		t.Fatal("body identity mismatch accepted")
+	}
+	for _, origin := range []string{"", "https://chronicleclassic.com", "https://other.chronicleclassic.com", "https://evil.test"} {
+		code, _ = request(t, s, a.token, a.id, "GET", "/v1/state", origin, nil)
+		if code != 403 {
+			t.Fatalf("origin %q accepted %d", origin, code)
+		}
+	}
+	for _, path := range []string{"/health", "/mcp", "/shutdown"} {
+		code, _ = request(t, s, a.token, a.id, "GET", path, "", nil)
+		if code != 401 {
+			t.Fatal("browser controlled agent endpoint", path, code)
+		}
+	}
+	code, _ = request(t, s, d.AgentToken, "", "GET", "/health", a.origin, nil)
+	if code != 403 {
+		t.Fatal("browser origin controlled health")
+	}
+	code, _ = request(t, s, d.Token, a.id, "GET", "/v1/state", a.origin, nil)
+	if code != 401 {
+		t.Fatal("state cleanup token granted browser access")
 	}
 	req, _ := http.NewRequest("GET", s.URL+"/health", nil)
 	req.Host = "evil.test"
@@ -273,113 +563,217 @@ func TestSecurityAndValidation(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	io.Copy(io.Discard, res.Body)
 	res.Body.Close()
 	if res.StatusCode != 403 {
-		t.Fatal("Host accepted")
+		t.Fatal("host bypass")
 	}
-	for _, mutate := range []func(map[string]any){func(h map[string]any) { h["page"].(map[string]any)["url"] = "https://evil.test/" }, func(h map[string]any) { h["tools"].([]any)[0].(map[string]any)["name"] = "whereami" }, func(h map[string]any) { delete(h["tools"].([]any)[0].(map[string]any), "description") }, func(h map[string]any) {
+	for _, mutate := range []func(map[string]any){func(h map[string]any) { h["name"] = "  " }, func(h map[string]any) { h["name"] = strings.Repeat("🙂", 81) }, func(h map[string]any) { h["page"].(map[string]any)["url"] = "https://chronicleclassic.com/edit" }, func(h map[string]any) { delete(h["tools"].([]any)[0].(map[string]any), "description") }, func(h map[string]any) {
 		h["tools"].([]any)[0].(map[string]any)["capability"].(map[string]any)["version"] = 1.5
-	}} {
-		h := heartbeat()
+	}, func(h map[string]any) { h["result"] = map[string]any{"id": "id", "generation": "g1", "result": nil} }} {
+		h := heartbeat(a.id, "name", "edit")
 		mutate(h)
-		if code, _ := request(t, s, d.Token, "POST", "/v1/browser", "http://localhost:4000", h); code != 400 {
-			t.Fatalf("invalid heartbeat accepted %d", code)
+		code, _ = a.req(t, s, "POST", "/v1/browser", h)
+		if code != 400 {
+			t.Fatal("invalid heartbeat accepted", code, h)
 		}
 	}
-	h := heartbeat()
-	request(t, s, d.Token, "POST", "/v1/browser", "http://localhost:4000", h)
-	h["clientId"] = "other"
-	if code, _ := request(t, s, d.Token, "POST", "/v1/browser", "http://localhost:4000", h); code != 409 {
-		t.Fatal("competing browser accepted")
+	for _, name := range []string{"whereami", "list_connections", "select_connection", "release_connection", "status"} {
+		h := heartbeat(a.id, "name", name)
+		code, _ = a.req(t, s, "POST", "/v1/browser", h)
+		if code != 400 {
+			t.Fatal("reserved name accepted", name)
+		}
 	}
-}
-func TestActivityAndLeaseClock(t *testing.T) {
-	d, s := setup(t)
-	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	d.now = func() time.Time { return now }
-	d.lastActivity = now
-	request(t, s, d.Token, "POST", "/v1/browser", "http://localhost:4000", heartbeat())
-	now = now.Add(time.Minute)
-	request(t, s, d.Token, "GET", "/v1/status", "", nil)
-	if !d.lastActivity.Equal(now.Add(-time.Minute)) {
-		t.Fatal("browser/status renewed idle")
+	code, _ = a.req(t, s, "POST", "/v1/browser", strings.Repeat("x", bodyLimit))
+	if code != 413 {
+		t.Fatal("unbounded body")
 	}
-	d.mu.Lock()
-	d.activityLocked("agent")
-	d.observeLocked("agent", true)
-	d.mu.Unlock()
-	last := d.lastActivity
-	now = now.Add(4 * time.Minute)
-	d.mu.Lock()
-	d.activityLocked("agent")
-	d.mu.Unlock()
-	if !d.lastActivity.After(last) {
-		t.Fatal("agent keepalive did not renew")
+	h := heartbeat(a.id, "name", "edit")
+	h["result"] = map[string]any{"id": "id", "generation": "g1", "ownershipRevision": 0, "result": strings.Repeat("x", 64<<10)}
+	code, _ = a.req(t, s, "POST", "/v1/browser", h)
+	if code != 413 {
+		t.Fatal("unbounded result")
 	}
-	now = now.Add(5 * time.Minute)
-	d.mu.Lock()
-	d.expireLocked()
-	if len(d.agents) != 0 || d.owner != "" {
-		t.Fatal("lease not released")
-	}
-	last = d.lastActivity
-	d.mu.Unlock()
-	now = now.Add(time.Hour)
-	request(t, s, d.Token, "POST", "/v1/browser", "http://localhost:4000", heartbeat())
-	request(t, s, d.AgentToken, "GET", "/health", "", nil)
-	if !last.Equal(d.lastActivity) {
-		t.Fatal("zero-agent housekeeping renewed idle")
-	}
-}
-func TestShutdownRequiresForce(t *testing.T) {
-	d, s := setup(t)
-	a := client(t, d, s, nil)
-	_ = a
-	code, _ := request(t, s, d.AgentToken, "POST", "/shutdown", "", map[string]any{})
-	if code != 409 {
-		t.Fatalf("active shutdown %d", code)
-	}
-	code, _ = request(t, s, d.AgentToken, "POST", "/shutdown", "", map[string]any{"force": true})
-	if code != 200 {
-		t.Fatal(code)
-	}
-	select {
-	case <-d.shutdown:
-	default:
-		t.Fatal("shutdown not signaled")
+	for _, revision := range []any{nil, -1, 1.5, float64(maxRevision) + 1} {
+		code, _ = a.req(t, s, "POST", "/v1/browser/revoke", map[string]any{"expectedOwnershipRevision": revision})
+		if code != 400 {
+			t.Fatal("invalid ownership revision", revision, code)
+		}
 	}
 }
 
-func TestIdlePolicy(t *testing.T) {
+func TestExpiryAndIdleClocks(t *testing.T) {
 	d, s := setup(t)
-	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	d.now = func() time.Time { return now }
-	d.lastActivity = now
-	now = now.Add(6*time.Hour - time.Second)
-	if d.idleLocked() {
-		t.Fatal("expired before six hours")
+	var elapsed atomic.Int64
+	base := time.Now()
+	d.now = func() time.Time { return base.Add(time.Duration(elapsed.Load())) }
+	d.lastActivity = base
+	request(t, s, "", "", "POST", "/v1/connect", "http://localhost:4000", map[string]any{"protocol": 3, "clientId": "unused"})
+	a := connect(t, s, "a", "edit")
+	b := connect(t, s, "b", "edit")
+	agent := client(t, d, s, nil)
+	selectTab(t, agent, a.id, true)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ch := callAsync(agent, ctx, "edit")
+	pending(t, d, a.id)
+	elapsed.Store(int64(9 * time.Second))
+	b.beat(t, s)
+	elapsed.Store(int64(10 * time.Second))
+	code, _ := b.req(t, s, "GET", "/v1/state", nil)
+	if code != 200 {
+		t.Fatal("other browser lease expired")
 	}
-	// Browser-only activity, including re-pairing, does not keep the daemon alive.
-	request(t, s, d.Token, "POST", "/v1/browser", "http://localhost:4000", heartbeat())
-	now = now.Add(time.Second)
-	if !d.idleLocked() {
-		t.Fatal("did not expire at six hours")
+	if !awaitResult(t, ch).IsError {
+		t.Fatal("expired call succeeded")
+	}
+	d.mu.Lock()
+	_, unused := d.connections["unused"]
+	_, old := d.connections[a.id]
+	remaining := len(d.connections)
+	last := d.lastActivity
+	d.mu.Unlock()
+	if unused || old || remaining != 1 {
+		t.Fatal("expiry did not remove allocation and token")
+	}
+	checkTools(t, agent, "")
+	_ = agent.Close()
+	elapsed.Store(int64(7 * time.Hour))
+	b = connect(t, s, "new-b", "edit")
+	b.beat(t, s)
+	request(t, s, d.AgentToken, "", "GET", "/health", "", nil)
+	d.mu.Lock()
+	if !d.idleLocked() || d.lastActivity.Before(last) {
+		t.Fatal("browser housekeeping reset idle")
 	}
 	d.Config.IdleTimeout = 0
 	if d.idleLocked() {
-		t.Fatal("disabled timeout expired")
+		t.Fatal("disabled idle expired")
 	}
-	d.Config.IdleTimeout = 6 * time.Hour
-	d.mu.Lock()
-	d.activityLocked("session")
 	d.mu.Unlock()
-	if d.idleLocked() {
-		t.Fatal("agent activity failed to extend idle deadline")
+}
+
+func TestAgentGETLeaseAndSafeStatus(t *testing.T) {
+	d, s := setup(t)
+	d.Config.AgentLease = 5 * time.Second
+	var elapsed atomic.Int64
+	base := time.Now()
+	d.now = func() time.Time { return base.Add(time.Duration(elapsed.Load())) }
+	tab := connect(t, s, "tab", "edit")
+	a := client(t, d, s, nil)
+	selectTab(t, a, tab.id, true)
+	code, status := request(t, s, d.AgentToken, "", "GET", "/health", "", nil)
+	if code != 200 || status["protocol"] != float64(3) || status["version"] != "0.2.0" {
+		t.Fatal(status)
+	}
+	connection := status["connections"].([]any)[0].(map[string]any)
+	owner := connection["owner"].(map[string]any)
+	if owner["id"] == a.ID() || owner["name"] != "test-agent" {
+		t.Fatal("unsafe owner identity", owner)
+	}
+	for _, field := range []string{"id", "name", "version"} {
+		text := owner[field].(string)
+		if n := utf8.RuneCountInString(text); n < 1 || n > 128 {
+			t.Fatal("unbounded owner", owner)
+		}
+	}
+	encoded, _ := json.Marshal(status)
+	for _, secret := range []string{d.Token, d.AgentToken, tab.token, a.ID(), `"sessionId"`, `"generation"`} {
+		if bytes.Contains(encoded, []byte(secret)) {
+			t.Fatal("status secret leak")
+		}
+	}
+	elapsed.Store(int64(4 * time.Second))
+	req, _ := http.NewRequest("GET", s.URL+"/mcp", nil)
+	req.Header.Set("Authorization", "Bearer "+d.AgentToken)
+	req.Header.Set("Mcp-Session-Id", a.ID())
+	req.Header.Set("Accept", "application/json")
+	res, e := http.DefaultClient.Do(req)
+	if e != nil {
+		t.Fatal(e)
+	}
+	io.Copy(io.Discard, res.Body)
+	res.Body.Close()
+	elapsed.Store(int64(6 * time.Second))
+	tab.beat(t, s)
+	d.mu.Lock()
+	d.expireLocked()
+	owned := d.connections[tab.id].owner == a.ID()
+	d.mu.Unlock()
+	if !owned {
+		t.Fatal("GET did not renew agent lease")
+	}
+	elapsed.Store(int64(9 * time.Second))
+	tab.beat(t, s)
+	d.mu.Lock()
+	d.expireLocked()
+	owned = d.connections[tab.id].owner != ""
+	count := len(d.agents)
+	d.mu.Unlock()
+	if owned || count != 0 {
+		t.Fatal("ghost owner after agent expiry")
+	}
+	res, e = http.DefaultClient.Do(req)
+	if e != nil {
+		t.Fatal(e)
+	}
+	res.Body.Close()
+	if res.StatusCode != 404 {
+		t.Fatal("expired session resurrected")
 	}
 }
 
-func TestServeShutdownCancelsWork(t *testing.T) {
+func TestPendingPinsAgentAndIdleButNotBrowserLease(t *testing.T) {
+	d, s := setup(t)
+	d.Config.AgentLease = time.Second
+	d.Config.IdleTimeout = time.Second
+	var elapsed atomic.Int64
+	base := time.Now()
+	d.now = func() time.Time { return base.Add(time.Duration(elapsed.Load())) }
+	tab := connect(t, s, "tab", "edit")
+	a := client(t, d, s, nil)
+	selectTab(t, a, tab.id, true)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ch := callAsync(a, ctx, "edit")
+	cmd := pending(t, d, tab.id)
+	elapsed.Store(int64(2 * time.Second))
+	tab.beat(t, s)
+	d.mu.Lock()
+	pinned := d.connections[tab.id].owner == a.ID() && !d.idleLocked()
+	d.mu.Unlock()
+	if !pinned {
+		t.Fatal("pending approval lost lease")
+	}
+	if !tab.result(t, s, cmd, cmd.OwnershipRevision, "success") {
+		t.Fatal("pending result rejected")
+	}
+	awaitResult(t, ch)
+	d.mu.Lock()
+	d.expireLocked()
+	idle := d.idleLocked()
+	owner := d.connections[tab.id].owner
+	d.mu.Unlock()
+	if !idle || owner != "" {
+		t.Fatal("completed work retained stale lease")
+	}
+}
+
+func TestChronicleOrigins(t *testing.T) {
+	d, _ := setup(t)
+	for _, origin := range []string{"https://chronicleclassic.com", "https://octo.chronicleclassic.com", "https://a.b.chronicleclassic.com", "https://octo.chronicleclassic.com:443", "http://localhost:4000"} {
+		if !d.allowed(origin) {
+			t.Fatal("approved origin rejected", origin)
+		}
+	}
+	for _, origin := range []string{"https://evilchronicleclassic.com", "https://chronicleclassic.com.evil.test", "http://octo.chronicleclassic.com", "https://octo.chronicleclassic.com:123", "https://chronicleclassic.com/", "https://*.chronicleclassic.com", "https://user@chronicleclassic.com"} {
+		if d.allowed(origin) {
+			t.Fatal("unsafe origin approved", origin)
+		}
+	}
+}
+
+func TestShutdownCancelsAllConnections(t *testing.T) {
 	d, e := New(Config{AgentLease: 5 * time.Minute, IdleTimeout: 6 * time.Hour})
 	if e != nil {
 		t.Fatal(e)
@@ -392,329 +786,133 @@ func TestServeShutdownCancelsWork(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- d.Serve(ctx, l) }()
-	// A response proves the server has finished initializing Config.Port.
-	endpoint := "http://" + l.Addr().String()
-	req, _ := http.NewRequest("GET", endpoint+"/health", nil)
-	req.Header.Set("Authorization", "Bearer "+d.AgentToken)
-	res, e := http.DefaultClient.Do(req)
-	if e != nil {
-		t.Fatal(e)
-	}
-	io.Copy(io.Discard, res.Body)
-	res.Body.Close()
-	c := mcp.NewClient(&mcp.Implementation{Name: "shutdown-test", Version: "1"}, nil)
-	session, e := c.Connect(context.Background(), &mcp.StreamableClientTransport{Endpoint: endpoint + "/mcp", HTTPClient: &http.Client{Transport: authTransport{d.AgentToken}}, MaxRetries: -1}, nil)
-	if e != nil {
-		t.Fatal(e)
-	}
-	defer session.Close()
-	fakeServer := &httptest.Server{URL: endpoint}
-	request(t, fakeServer, d.Token, "POST", "/v1/browser", "http://localhost:4000", heartbeat())
-	if _, e = session.ListTools(context.Background(), nil); e != nil {
-		t.Fatal(e)
-	}
+	s := &httptest.Server{URL: "http://" + l.Addr().String()}
+	request(t, s, d.AgentToken, "", "GET", "/health", "", nil)
+	aTab := connect(t, s, "a", "edit")
+	bTab := connect(t, s, "b", "edit")
+	a := client(t, d, s, nil)
+	b := client(t, d, s, nil)
+	selectTab(t, a, aTab.id, true)
+	selectTab(t, b, bTab.id, true)
 	callCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 	defer stop()
-	if _, e = session.CallTool(context.Background(), &mcp.CallToolParams{Name: "whereami"}); e != nil {
-		t.Fatal(e)
+	ac := callAsync(a, callCtx, "edit")
+	bc := callAsync(b, callCtx, "edit")
+	pending(t, d, aTab.id)
+	pending(t, d, bTab.id)
+	code, _ := request(t, s, d.AgentToken, "", "POST", "/shutdown", "", map[string]any{})
+	if code != 409 {
+		t.Fatal("unforced active shutdown")
 	}
-	ch := callAsync(session, callCtx)
-	pending(t, d)
-	cancel()
-	select {
-	case <-ch:
-	case <-callCtx.Done():
-		t.Fatal("shutdown did not cancel call")
+	code, _ = request(t, s, d.AgentToken, "", "POST", "/shutdown", "", map[string]any{"force": true})
+	if code != 200 {
+		t.Fatal(code)
+	}
+	for _, ch := range []<-chan *mcp.CallToolResult{ac, bc} {
+		select {
+		case <-ch:
+		case <-callCtx.Done():
+			t.Fatal("shutdown did not cancel work")
+		}
 	}
 	select {
-	case e := <-done:
-		if e != nil {
-			t.Fatal(e)
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
 		}
 	case <-callCtx.Done():
-		t.Fatal("Serve did not stop")
+		t.Fatal("shutdown stuck")
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.pending != nil {
-		t.Fatal("pending command retained")
+	if d.pendingLocked() != 0 {
+		t.Fatal("pending work retained")
 	}
-	if d.browser == nil {
+	if len(d.connections) != 2 {
 		t.Fatal("shutdown unnecessarily discarded browser metadata")
 	}
 }
 
-func TestDiscoveryDoesNotClaimAndCallsNeedExplicitClaim(t *testing.T) {
+func TestPreflightBootstrapAndResultBounds(t *testing.T) {
 	d, s := setup(t)
-	a := client(t, d, s, nil)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	request(t, s, d.Token, "POST", "/v1/browser", "http://localhost:4000", heartbeat())
-	if _, e := a.ListTools(ctx, nil); e != nil {
-		t.Fatal(e)
-	}
-	d.mu.Lock()
-	owner := d.owner
-	d.mu.Unlock()
-	if owner != "" {
-		t.Fatal("automatic discovery claimed browser")
-	}
-	r, e := a.CallTool(ctx, &mcp.CallToolParams{Name: "edit", Arguments: map[string]any{}})
-	if e != nil || !r.IsError || !strings.Contains(resultText(r), "whereami") {
-		t.Fatalf("unclaimed call: %v %v", r, e)
-	}
-	if _, e = a.CallTool(ctx, &mcp.CallToolParams{Name: "whereami"}); e != nil {
-		t.Fatal(e)
-	}
-	d.mu.Lock()
-	owner = d.owner
-	d.mu.Unlock()
-	if owner != a.ID() {
-		t.Fatal("explicit observation did not claim")
-	}
-}
-
-func TestPendingCallPinsLeaseAndIdle(t *testing.T) {
-	d, e := New(Config{IdleTimeout: time.Second, AgentLease: time.Second})
-	if e != nil {
-		t.Fatal(e)
-	}
-	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	d.now = func() time.Time { return now }
-	d.lastActivity = now
-	d.activityLocked("owner")
-	d.owner = "owner"
-	d.pending = &command{owner: "owner", done: make(chan outcome, 1)}
-	now = now.Add(2 * time.Second)
-	d.expireLocked()
-	if d.owner != "owner" || len(d.agents) != 1 {
-		t.Fatal("active approval call lost agent lease")
-	}
-	if d.idleLocked() {
-		t.Fatal("active call triggered idle exit")
-	}
-	d.finishLocked(outcome{err: "complete"})
-	d.expireLocked()
-	if d.owner != "" || len(d.agents) != 0 || !d.idleLocked() {
-		t.Fatal("completed call retained stale lease")
-	}
-}
-
-func TestCapabilityRevisionAndSuccessContinuation(t *testing.T) {
-	d, s := setup(t)
-	a := client(t, d, s, nil)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	hb := heartbeat()
-	request(t, s, d.Token, "POST", "/v1/browser", "http://localhost:4000", hb)
-	if _, e := a.CallTool(ctx, &mcp.CallToolParams{Name: "whereami"}); e != nil {
-		t.Fatal(e)
-	}
-	hb["tools"].([]any)[0].(map[string]any)["capability"].(map[string]any)["stateRevision"] = 1
-	request(t, s, d.Token, "POST", "/v1/browser", "http://localhost:4000", hb)
-	r, e := a.CallTool(ctx, &mcp.CallToolParams{Name: "edit", Arguments: map[string]any{}})
-	if e != nil || !r.IsError || !strings.Contains(resultText(r), "stale_state") {
-		t.Fatalf("changed capability accepted: %v %v", r, e)
-	}
-	if _, e = a.ListTools(ctx, nil); e != nil {
-		t.Fatal(e)
-	}
-	for range 2 {
-		ch := callAsync(a, ctx)
-		c := pending(t, d)
-		continuation := map[string]any{"status": "success", "result": map[string]any{"revision": 42, "saved": false}, "extra": "browser-defined"}
-		hb["result"] = map[string]any{"id": c.ID, "generation": "g1", "result": continuation}
-		code, ack := request(t, s, d.Token, "POST", "/v1/browser", "http://localhost:4000", hb)
-		if code != 200 || ack["resultAccepted"] != true {
-			t.Fatal(code, ack)
-		}
-		got := awaitResult(t, ch)
-		want, _ := json.Marshal(continuation)
-		if got.IsError || resultText(got) != string(want) {
-			t.Fatalf("continuation modified: %s", resultText(got))
+	for _, origin := range []string{"", "https://evil.test"} {
+		code, _ := request(t, s, "", "", "POST", "/v1/connect", origin, map[string]any{"protocol": 3, "clientId": "id"})
+		if code != 403 {
+			t.Fatal("unauthorized bootstrap", code)
 		}
 	}
-}
-
-func TestHealthInspection(t *testing.T) {
-	d, s := setup(t)
-	code, h := request(t, s, d.AgentToken, "GET", "/health", "", nil)
-	if code != 200 || h["browser"].(map[string]any)["connected"] != false || h["ownership"].(map[string]any)["busy"] != false {
-		t.Fatalf("disconnected status: %v", h)
-	}
-	a := client(t, d, s, nil)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	request(t, s, d.Token, "POST", "/v1/browser", "http://localhost:4000", heartbeat())
-	if _, e := a.CallTool(ctx, &mcp.CallToolParams{Name: "whereami"}); e != nil {
-		t.Fatal(e)
-	}
-	_, h = request(t, s, d.AgentToken, "GET", "/health", "", nil)
-	browser := h["browser"].(map[string]any)
-	owner := h["ownership"].(map[string]any)
-	if browser["connected"] != true || browser["page"].(map[string]any)["url"] != "http://localhost:4000/edit" {
-		t.Fatalf("browser status: %v", browser)
-	}
-	if owner["busy"] != true || owner["client"].(map[string]any)["name"] != "test" || owner["client"].(map[string]any)["version"] != "1" {
-		t.Fatalf("owner status: %v", owner)
-	}
-	encoded, _ := json.Marshal(h)
-	for _, secret := range []string{d.Token, d.AgentToken, a.ID(), `"sessionId"`, `"generation"`} {
-		if bytes.Contains(encoded, []byte(secret)) {
-			t.Fatalf("health leaked secret or internal identifier %q", secret)
-		}
-	}
-	if h["lastAgentActivity"] == nil || h["idle"].(map[string]any)["deadline"] == nil {
-		t.Fatal("activity metadata missing")
-	}
-}
-
-func TestInspectionIdleClock(t *testing.T) {
-	d, e := New(Config{IdleTimeout: 6 * time.Hour, AgentLease: time.Minute})
-	if e != nil {
-		t.Fatal(e)
-	}
-	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	d.now = func() time.Time { return now }
-	d.lastActivity = now
-	now = now.Add(time.Hour)
-	i := d.inspectionLocked()
-	if i.Idle.Disabled || i.Idle.Remaining != "5h0m0s" || !i.Idle.Deadline.Equal(d.lastActivity.Add(6*time.Hour)) {
-		t.Fatalf("incorrect idle: %+v", i.Idle)
-	}
-	now = now.Add(6 * time.Hour)
-	d.pending = &command{}
-	i = d.inspectionLocked()
-	if i.Idle.Remaining != "0s" || !i.Idle.PendingCall {
-		t.Fatalf("incorrect pending idle: %+v", i.Idle)
-	}
-	d.Config.IdleTimeout = 0
-	i = d.inspectionLocked()
-	if !i.Idle.Disabled || i.Idle.Deadline != nil || i.Idle.Remaining != "" {
-		t.Fatalf("incorrect disabled idle: %+v", i.Idle)
-	}
-}
-
-func TestGETActivityAndSessionExpiryUseOneLease(t *testing.T) {
-	d, s := setup(t)
-	d.Config.AgentLease = 5 * time.Second
-	var clock atomic.Int64
-	base := time.Now()
-	d.now = func() time.Time { return base.Add(time.Duration(clock.Load())) }
-	a := client(t, d, s, nil)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	request(t, s, d.Token, "POST", "/v1/browser", "http://localhost:4000", heartbeat())
-	if _, e := a.CallTool(ctx, &mcp.CallToolParams{Name: "whereami"}); e != nil {
-		t.Fatal(e)
-	}
-	clock.Store(int64(d.Config.AgentLease - time.Nanosecond))
-	// GET is activity even when it does not start a new standalone SSE stream.
-	req, _ := http.NewRequestWithContext(ctx, "GET", s.URL+"/mcp", nil)
-	req.Header.Set("Authorization", "Bearer "+d.AgentToken)
-	req.Header.Set("Mcp-Session-Id", a.ID())
-	req.Header.Set("Accept", "application/json")
+	req, _ := http.NewRequest("OPTIONS", s.URL+"/v1/browser", nil)
+	req.Header.Set("Origin", "https://octo.chronicleclassic.com")
 	res, e := http.DefaultClient.Do(req)
 	if e != nil {
 		t.Fatal(e)
 	}
-	io.Copy(io.Discard, res.Body)
 	res.Body.Close()
-	if res.StatusCode == 404 {
-		t.Fatal("session expired before lease")
+	if res.StatusCode != 204 || res.Header.Get("Access-Control-Allow-Origin") != "https://octo.chronicleclassic.com" || res.Header.Get("Access-Control-Allow-Private-Network") != "true" || !strings.Contains(res.Header.Get("Access-Control-Allow-Headers"), "X-Chronicle-Client") {
+		t.Fatal("invalid PNA preflight")
 	}
-	clock.Store(int64(d.Config.AgentLease + time.Nanosecond))
-	d.mu.Lock()
-	d.expireLocked()
-	owner := d.owner
-	count := len(d.agents)
-	d.mu.Unlock()
-	if owner != a.ID() || count != 1 {
-		t.Fatal("GET-renewed agent lost ownership at original deadline")
+	_ = d
+}
+
+func TestCallDeadline(t *testing.T) {
+	d, s := setup(t)
+	d.callTimeout = 0
+	tab := connect(t, s, "tab", "edit")
+	a := client(t, d, s, nil)
+	selectTab(t, a, tab.id, true)
+	r := call(t, a, "edit", map[string]any{})
+	if !r.IsError || !strings.Contains(resultText(r), "timed out") {
+		t.Fatal("deadline not enforced")
 	}
-	clock.Store(int64(2 * d.Config.AgentLease))
-	d.mu.Lock()
-	d.expireLocked()
-	owner = d.owner
-	count = len(d.agents)
-	d.mu.Unlock()
-	if owner != "" || count != 0 {
-		t.Fatal("expired agent retained ghost ownership")
-	}
-	eventually(t, func() bool {
-		for session := range d.server.Sessions() {
-			if session.ID() == a.ID() {
-				return false
-			}
-		}
-		return true
-	})
-	res, e = http.DefaultClient.Do(req)
-	if e != nil {
-		t.Fatal(e)
-	}
-	io.Copy(io.Discard, res.Body)
-	res.Body.Close()
-	if res.StatusCode != 404 {
-		t.Fatalf("expired session resurrected: %d", res.StatusCode)
+	code, v := tab.req(t, s, "GET", "/v1/state", nil)
+	if code != 200 || len(v["commands"].([]any)) != 0 || v["connection"].(map[string]any)["owner"] == nil {
+		t.Fatal("timeout unpaired or retained command")
 	}
 }
 
-func TestChronicleSubdomainOrigins(t *testing.T) {
+func TestBodyIdentityAndScopedStatus(t *testing.T) {
 	d, s := setup(t)
-	for _, tt := range []struct {
-		origin  string
-		allowed bool
-	}{
-		{"https://chronicleclassic.com", true},
-		{"https://octo.chronicleclassic.com", true},
-		{"https://preview.octo.chronicleclassic.com", true},
-		{"https://octo.chronicleclassic.com:443", true},
-		{"http://localhost:4000", true},
-		{"http://octo.chronicleclassic.com", false},
-		{"https://octo.chronicleclassic.com:8443", false},
-		{"https://evilchronicleclassic.com", false},
-		{"https://chronicleclassic.com.evil.test", false},
-		{"https://chronicleclassic.com@evil.test", false},
-		{"https://evil.test@octo.chronicleclassic.com", false},
-		{"https://.chronicleclassic.com", false},
-		{"https://-bad.chronicleclassic.com", false},
-		{"https://octo.chronicleclassic.com/path", false},
-		{"https://octo.chronicleclassic.com?query", false},
-		{"null", false},
-	} {
-		t.Run(tt.origin, func(t *testing.T) {
-			r, err := http.NewRequest(http.MethodOptions, s.URL+"/v1/connect", nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			r.Header.Set("Origin", tt.origin)
-			r.Header.Set("Access-Control-Request-Method", "POST")
-			res, err := http.DefaultClient.Do(r)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer res.Body.Close()
-			if tt.allowed {
-				if res.StatusCode != 204 || res.Header.Get("Access-Control-Allow-Origin") != tt.origin {
-					t.Fatalf("preflight not allowed: status=%d", res.StatusCode)
-				}
-			} else if res.StatusCode != 403 || res.Header.Get("Access-Control-Allow-Origin") != "" {
-				t.Fatalf("untrusted origin allowed: status=%d", res.StatusCode)
-			}
-		})
+	a := connect(t, s, "a", "edit_a")
+	b := connect(t, s, "b", "edit_b")
+	agent := client(t, d, s, nil)
+	selectTab(t, agent, b.id, true)
+	for _, path := range []string{"/v1/browser/revoke", "/v1/browser/disconnect"} {
+		code, _ := a.req(t, s, "POST", path, map[string]any{"clientId": b.id, "expectedOwnershipRevision": 0})
+		if code != 403 {
+			t.Fatal("body client identity ignored", path, code)
+		}
 	}
-	origin := "https://octo.chronicleclassic.com"
-	if code, _ := request(t, s, "", "POST", "/v1/connect", origin, map[string]any{"protocol": 2}); code != 200 {
-		t.Fatalf("subdomain bootstrap: %d", code)
+	code, v := a.req(t, s, "GET", "/v1/status", nil)
+	if code != 200 || v["connection"].(map[string]any)["id"] != a.id {
+		t.Fatal("status not scoped")
 	}
-	hb := heartbeat()
-	hb["page"].(map[string]any)["url"] = origin + "/edit"
-	if code, _ := request(t, s, d.Token, "POST", "/v1/browser", origin, hb); code != 200 {
-		t.Fatalf("subdomain heartbeat: %d", code)
+	encoded, _ := json.Marshal(v)
+	if bytes.Contains(encoded, []byte("edit_b")) || bytes.Contains(encoded, []byte(b.token)) || bytes.Contains(encoded, []byte(agent.ID())) {
+		t.Fatal("cross-tab status leak")
 	}
-	hb["page"].(map[string]any)["url"] = "https://other.chronicleclassic.com/edit"
-	if code, _ := request(t, s, d.Token, "POST", "/v1/browser", origin, hb); code != 400 {
-		t.Fatalf("cross-origin heartbeat must still fail: %d", code)
+	// Unowned revocation is idempotent at the current revision.
+	code, v = a.req(t, s, "POST", "/v1/browser/revoke", map[string]any{"expectedOwnershipRevision": 0})
+	if code != 200 || v["connection"].(map[string]any)["ownershipRevision"] != float64(0) {
+		t.Fatal("unowned revoke changed revision")
+	}
+}
+
+func TestSingleTabNeverImplicitlySelected(t *testing.T) {
+	d, s := setup(t)
+	connect(t, s, "only-tab", "edit")
+	a := client(t, d, s, nil)
+	checkTools(t, a, "")
+	list := value(t, call(t, a, "list_connections", nil))["connections"].([]any)
+	if len(list) != 1 {
+		t.Fatal(list)
+	}
+	where := value(t, call(t, a, "whereami", nil))
+	if where["selectedConnection"] != nil || where["page"] != nil || where["connected"] != false {
+		t.Fatal("single tab automatically selected")
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.connections["only-tab"].owner != "" {
+		t.Fatal("inspection acquired browser")
 	}
 }

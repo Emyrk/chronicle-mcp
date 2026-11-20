@@ -156,7 +156,7 @@ func TestHealthIdentityAndShutdown(t *testing.T) {
 		protocol         int
 		wantOK           bool
 	}{
-		{"valid", 200, "chronicle", relay.Version, 2, true}, {"unauthorized", 401, "chronicle", relay.Version, 2, false}, {"unrelated", 200, "other", relay.Version, 2, false}, {"version", 200, "chronicle", "old", 2, false}, {"protocol", 200, "chronicle", relay.Version, 1, false},
+		{"valid", 200, "chronicle", relay.Version, relay.Protocol, true}, {"unauthorized", 401, "chronicle", relay.Version, relay.Protocol, false}, {"unrelated", 200, "other", relay.Version, relay.Protocol, false}, {"version", 200, "chronicle", "old", relay.Protocol, false}, {"protocol", 200, "chronicle", relay.Version, 1, false}, {"protocol2", 200, "chronicle", "0.1.0", 2, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := fixture()
@@ -178,9 +178,11 @@ func TestHealthIdentityAndShutdown(t *testing.T) {
 				}
 				w.WriteHeader(tc.status)
 				_ = json.NewEncoder(w).Encode(health{Service: tc.service, Version: tc.version, Protocol: tc.protocol, Origin: s.Origin, IdleTimeout: s.IdleTimeout.String(), AgentLease: s.AgentLease.String(), Inspection: relay.Inspection{
-					Browser:   relay.BrowserInspection{Connected: true, Page: &relay.PageInspection{URL: "https://chronicleclassic.com/workshop"}},
-					Ownership: relay.OwnershipInspection{Busy: true, Client: &relay.ClientIdentity{Name: "test-agent", Version: "1"}},
-					Idle:      relay.IdleInspection{Disabled: true},
+					Connections: []relay.ConnectionInspection{
+						{ID: "tab-a", Name: "Workshop A", Page: &relay.PageInspection{URL: "https://chronicleclassic.com/workshop"}, Owner: &relay.ClientIdentity{ID: "public-agent", Name: "test-agent", Version: "1"}, OwnershipRevision: 3, Availability: "busy", Pending: true},
+						{ID: "tab-b", Name: "Workshop B", Page: &relay.PageInspection{URL: "https://chronicleclassic.com/other"}, Availability: "available"},
+					},
+					Idle: relay.IdleInspection{Disabled: true},
 				}})
 			}))
 			defer server.Close()
@@ -194,16 +196,39 @@ func TestHealthIdentityAndShutdown(t *testing.T) {
 			if (err == nil) != tc.wantOK {
 				t.Fatalf("status error: %v", err)
 			}
+			if tc.protocol == 2 {
+				if err == nil || !strings.Contains(err.Error(), "upgrade and restart") {
+					t.Fatalf("protocol 2 needs actionable upgrade error: %v", err)
+				}
+				startErr := Run(context.Background(), []string{"start", "--port", "0", "--state-dir", dir}, io.Discard, io.Discard)
+				if startErr == nil || !strings.Contains(startErr.Error(), "upgrade and restart") {
+					t.Fatalf("start accepted protocol 2: %v", startErr)
+				}
+				current, readErr := readState(dir)
+				if readErr != nil || current != s {
+					t.Fatal("protocol 2 rejection changed daemon state")
+				}
+			}
 			if tc.wantOK {
 				var inspection relay.Inspection
 				if err := json.Unmarshal(out.Bytes(), &inspection); err != nil {
 					t.Fatal(err)
 				}
-				if !inspection.Browser.Connected || inspection.Browser.Page == nil || inspection.Browser.Page.URL != "https://chronicleclassic.com/workshop" {
-					t.Fatalf("status lost browser metadata: %+v", inspection.Browser)
+				if len(inspection.Connections) != 2 {
+					t.Fatalf("status lost connections: %+v", inspection.Connections)
 				}
-				if !inspection.Ownership.Busy || inspection.Ownership.Client == nil || inspection.Ownership.Client.Name != "test-agent" || inspection.Ownership.Client.Version != "1" {
-					t.Fatalf("status lost ownership metadata: %+v", inspection.Ownership)
+				first, second := inspection.Connections[0], inspection.Connections[1]
+				if first.ID != "tab-a" || first.Name != "Workshop A" || first.Page == nil || first.Page.URL != "https://chronicleclassic.com/workshop" || first.OwnershipRevision != 3 || first.Availability != "busy" || !first.Pending {
+					t.Fatalf("status lost connection metadata: %+v", first)
+				}
+				if first.Owner == nil || first.Owner.ID != "public-agent" || first.Owner.Name != "test-agent" || first.Owner.Version != "1" {
+					t.Fatalf("status lost owner metadata: %+v", first.Owner)
+				}
+				if second.ID != "tab-b" || second.Availability != "available" || second.Owner != nil || second.Pending {
+					t.Fatalf("status lost available connection metadata: %+v", second)
+				}
+				if strings.Contains(out.String(), `"browser":`) || strings.Contains(out.String(), `"ownership":`) {
+					t.Fatal("status retained singleton metadata")
 				}
 				if !inspection.Idle.Disabled {
 					t.Fatal("status lost idle metadata")
