@@ -1,0 +1,8 @@
+{
+  "name": "chronicle",
+  "version": "0.1.0",
+  "mcpServers": "./plugin.mcp.json",
+  "description": "Connect Claude Code to a Chronicle browser tab through the local MCP relay.",
+  "author": { "name": "Emyrk" },
+  "repository": "https://github.com/Emyrk/chronicle-mcp"
+}
