@@ -72,6 +72,12 @@ than replacing an existing tab. Unused bootstrap allocations expire after the
 browser heartbeat lease. Only connections with a valid heartbeat appear in
 agent discovery. Retrying a lost bootstrap response uses a fresh ID.
 
+The daemon admits at most 64 total bootstrap allocations/live connections.
+Bootstrap returns HTTP 503 when capacity is exhausted; expiry or explicit
+disconnect frees capacity. Management responses are bounded to 8 MiB, including
+all connection metadata, and non-MCP response writes have a five-second deadline.
+These limits do not change MCP SSE stream lifetime.
+
 All browser operations require this token. Header `X-Chronicle-Client` and body
 `clientId`, where present, must match its bound connection. Exact request Origin
 and page-origin matching remain enforced; bind the connection to its bootstrap
