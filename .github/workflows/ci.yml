@@ -22,6 +22,9 @@ jobs:
         with:
           node-version: '22'
           cache: npm
+      - name: Use a canonical temporary directory
+        # macOS /var is a symlink; private-state tests reject symlink ancestors.
+        run: node -e 'const fs = require("node:fs"); fs.appendFileSync(process.env.GITHUB_ENV, "TMPDIR=" + fs.realpathSync(process.env.RUNNER_TEMP) + "\n");'
       - run: npm ci
       - run: go test -race ./...
       - run: go vet ./...

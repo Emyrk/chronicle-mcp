@@ -190,7 +190,8 @@ and stale-operation guarantees.
 `scripts/release.tsv` pins v0.2.1 and GitHub-attested raw executables for
 Linux/macOS amd64/arm64. The installer verifies provenance before execution,
 rejects unsafe paths, and stores binaries outside the replaceable plugin
-installation. See [release metadata and verification policy](scripts/README.md).
+installation. See [release metadata and verification policy](scripts/README.md)
+and the [release publishing procedure](docs/releases.md).
 No hook or background auto-installer runs when loading the plugin.
 
 ## Development and validation
