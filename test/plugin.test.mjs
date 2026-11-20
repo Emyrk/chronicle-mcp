@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, mkdtemp, rm, access, mkdir, writeFile, copyFile, symlink } from 'node:fs/promises';
+import { readFile, mkdtemp, realpath, rm, access, mkdir, writeFile, copyFile, symlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -50,7 +50,9 @@ test('plugin uses authenticated HTTP with a side-effect-free headers helper', as
 });
 
 async function fixture(t) {
-  const dir = await mkdtemp(path.join(os.tmpdir(), 'chronicle plugin '));
+  // macOS may expose its temporary directory through /var -> /private/var.
+  // Resolve that system alias before testing the installer's symlink guard.
+  const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), 'chronicle plugin ')));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const script = path.join(dir, 'chronicle.sh');
   await copyFile(path.join(root, 'scripts/chronicle.sh'), script);
