@@ -160,6 +160,24 @@ locks with a five-second write deadline. This accommodates worst-case escaped
 metadata for all 64 connections. CLI health decoding uses the same bound. MCP SSE
 streams do not inherit that deadline.
 
+## Local dashboard
+
+`GET /` serves an embedded, unauthenticated dashboard on this same loopback
+listener. Use `http://127.0.0.1:<port>/`; `localhost` is not an alias for the
+exact Host policy. It displays safe inspection data plus uptime and provides
+revision-pinned control revocation and confirmed shared shutdown. The dashboard
+is local administration, not browser workshop execution; it never saves or
+modifies module source.
+
+Dashboard routes have their own same-origin policy, independent of Chronicle
+browser CORS. Remote/null Origins and cross-site Fetch Metadata are refused.
+Mutations require POST, exact loopback Origin, JSON, and a dashboard-specific
+header. These checks prevent cross-origin websites from invoking local controls;
+they do not restrict other local processes or local users. Do not expose the
+listener through a reverse proxy or port forward. Existing authenticated MCP,
+health, shutdown, and browser APIs retain their credential requirements.
+Dashboard polling never extends agent leases or daemon idle lifetime.
+
 ## Validation
 
 ```sh
