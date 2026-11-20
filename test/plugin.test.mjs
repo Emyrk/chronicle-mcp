@@ -13,6 +13,20 @@ const exec = promisify(execFile);
 const root = fileURLToPath(new URL('../', import.meta.url));
 const read = file => readFile(new URL(`../${file}`, import.meta.url), 'utf8');
 
+test('marketplace lists the root plugin with one authoritative version', async () => {
+  const marketplace = JSON.parse(await read('.claude-plugin/marketplace.json'));
+  const manifest = JSON.parse(await read('.claude-plugin/plugin.json'));
+  assert.equal(marketplace.name, 'chronicle-plugins');
+  assert.equal(marketplace.owner.name, 'Emyrk');
+  assert.equal(marketplace.plugins.length, 1);
+  const entry = marketplace.plugins[0];
+  assert.equal(entry.name, manifest.name);
+  assert.equal(entry.source, './');
+  assert.equal(entry.version, undefined);
+  assert.ok(entry.description.length > 0);
+  await access(path.join(root, entry.source, '.claude-plugin/plugin.json'));
+});
+
 test('plugin uses standard component locations and a thin discoverable skill', async () => {
   const manifest = JSON.parse(await read('.claude-plugin/plugin.json'));
   assert.equal(manifest.name, 'chronicle');

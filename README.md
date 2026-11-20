@@ -13,7 +13,19 @@ HTTP MCP at `http://127.0.0.1:17643/mcp`. The plugin runtime does **not** requir
 Node.js. The old Node relay remains only as a compatibility reference; do not run it
 alongside the daemon on the same port.
 
-### 1. Load the Claude Code plugin
+### 1. Install the Claude Code plugin
+
+Add our marketplace and install the plugin from your terminal:
+
+```sh
+claude plugin marketplace add Emyrk/chronicle-mcp
+claude plugin install chronicle@chronicle-plugins
+```
+
+Then start Claude Code in your project and run `/chronicle:setup`.
+This is Chronicle's own marketplace, not an Anthropic directory listing.
+
+For local development instead, clone the repository and load it directly:
 
 ```sh
 git clone https://github.com/Emyrk/chronicle-mcp.git
@@ -21,7 +33,11 @@ cd /absolute/path/to/your/project
 claude --plugin-dir /absolute/path/chronicle-mcp
 ```
 
-No marketplace is required. Use a Claude Code version supporting
+Use one installation method at a time to avoid loading duplicate Chronicle
+plugins. When moving from `--plugin-dir` to the marketplace installation, start
+a new session without `--plugin-dir`. Do not assume the inline plugin and the
+marketplace plugin share a data directory; run setup for the installed plugin.
+Use a Claude Code version supporting
 [plugin path variables](https://code.claude.com/docs/en/plugins-reference#environment-variables)
 and HTTP MCP `headersHelper`. The plugin bundles three thin skills, an explicit
 installer, and MCP configuration, with no hooks or agents. Loading it does not
@@ -185,6 +201,32 @@ Chronicle frontend. Protocol 2 clients receive an upgrade error; the daemon
 never falls back to routing calls to an arbitrary tab. See the
 [multi-connection contract](docs/multi-connections.md) for ownership, revocation,
 and stale-operation guarantees.
+
+## Marketplace updates
+
+The marketplace catalog is `.claude-plugin/marketplace.json`; the plugin version
+comes from `.claude-plugin/plugin.json`. Maintainers must bump the plugin version
+to distribute changed files to cached marketplace installs. Pushing commits alone
+with the same version does not update those installs.
+
+To update manually from a terminal:
+
+```sh
+claude plugin marketplace update chronicle-plugins
+claude plugin update chronicle@chronicle-plugins
+```
+
+Reload plugins or start a new Claude Code session after updating. Third-party
+marketplace auto-update is off by default. Users can opt in under **`/plugin` →
+Marketplaces → chronicle-plugins → auto-update**; the catalog cannot enable it
+for them.
+
+**Plugin updates do not upgrade the running daemon.** If a plugin update changes
+the pinned executable version, explicitly stop the old daemon with its matching
+CLI before upgrading, then run setup and reconnect. With auto-update enabled,
+you may need the retained old CLI if the plugin has already changed. Never
+silently force shutdown or bypass release verification. See the
+[upgrade procedure](docs/releases.md#upgrades).
 
 ## Release packaging
 

@@ -1,0 +1,14 @@
+{
+  "name": "chronicle-plugins",
+  "description": "Chronicle's Claude Code plugin for connecting to browser module editors.",
+  "owner": {
+    "name": "Emyrk"
+  },
+  "plugins": [
+    {
+      "name": "chronicle",
+      "source": "./",
+      "description": "Connect Claude Code to Chronicle through a local MCP relay."
+    }
+  ]
+}
