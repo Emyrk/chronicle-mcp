@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -386,5 +387,97 @@ func TestConcurrentStartReusesWinner(t *testing.T) {
 			t.Fatal("concurrent winner cleanup timed out")
 		case <-ticker.C:
 		}
+	}
+}
+
+func TestLargeRegistryStatusReuseAndStop(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("detached lifecycle platform")
+	}
+	dir := filepath.Join(t.TempDir(), "state")
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	args := []string{"start", "--port", "0", "--state-dir", dir, "--idle-timeout", "0"}
+	if err := Run(ctx, args, io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = Run(cleanup, []string{"stop", "--force", "--state-dir", dir}, io.Discard, io.Discard)
+	})
+	state, err := readState(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	browserRequest := func(path, id, token string, body any) map[string]any {
+		t.Helper()
+		encoded, _ := json.Marshal(body)
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d%s", state.Port, path), bytes.NewReader(encoded))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Origin", "http://localhost:4000")
+		req.Header.Set("Content-Type", "application/json")
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+			req.Header.Set("X-Chronicle-Client", id)
+		}
+		response, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		if response.StatusCode != 200 {
+			t.Fatalf("browser route %s: %d", path, response.StatusCode)
+		}
+		var result map[string]any
+		if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	prefix := "http://localhost:4000/"
+	longURL := prefix + strings.Repeat("a", 8192-len(prefix))
+	for i := 0; i < 9; i++ {
+		id := fmt.Sprintf("large-registry-%d", i)
+		token := browserRequest("/v1/connect", id, "", map[string]any{"protocol": relay.Protocol, "clientId": id})["token"].(string)
+		browserRequest("/v1/browser", id, token, map[string]any{"clientId": id, "name": id, "page": map[string]any{"url": longURL, "generation": "g1", "sessionId": "page"}, "tools": []any{}})
+	}
+	response, err := request(ctx, state, http.MethodGet, "/health", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := io.ReadAll(io.LimitReader(response.Body, relay.MaxControlResponseBytes+1))
+	response.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) <= 64<<10 || len(raw) > relay.MaxControlResponseBytes {
+		t.Fatalf("unexpected health size: %d", len(raw))
+	}
+	var output bytes.Buffer
+	if err := Run(ctx, []string{"status", "--state-dir", dir}, &output, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	var status health
+	if err := json.Unmarshal(output.Bytes(), &status); err != nil {
+		t.Fatal(err)
+	}
+	if len(status.Connections) != 9 {
+		t.Fatalf("lost connections: %d", len(status.Connections))
+	}
+	if err := Run(ctx, args, io.Discard, io.Discard); err != nil {
+		t.Fatalf("reuse with large registry: %v", err)
+	}
+	after, err := readState(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.AgentToken != state.AgentToken {
+		t.Fatal("reused daemon replaced")
+	}
+	if err := Run(ctx, []string{"stop", "--state-dir", dir}, io.Discard, io.Discard); err != nil {
+		t.Fatalf("stop with large registry: %v", err)
 	}
 }

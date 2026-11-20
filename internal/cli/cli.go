@@ -153,7 +153,7 @@ func checkHealth(ctx context.Context, s state) (health, error) {
 	if resp.StatusCode != http.StatusOK {
 		return h, fmt.Errorf("daemon authentication/health rejected (HTTP %d); refusing reuse", resp.StatusCode)
 	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&h); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, relay.MaxControlResponseBytes)).Decode(&h); err != nil {
 		return h, errors.New("invalid daemon health response")
 	}
 	if h.Service != "chronicle" {

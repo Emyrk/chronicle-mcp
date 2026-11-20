@@ -129,7 +129,9 @@ stopping them. Explicitly stop/upgrade an old daemon with its matching CLI.
 
 - `POST /v1/connect` requires approved Origin and `{protocol:3,clientId}`. It
   returns a fresh 64-hex token bound to that client ID and exact Origin. Duplicate
-  active IDs return 409; unused allocations expire after ten seconds.
+  active IDs return 409; unused allocations expire after ten seconds. The registry
+  permits at most 64 allocated/live connections. Bootstrap returns 503 at capacity;
+  disconnect a tab or wait for unused/expired leases before retrying with a fresh ID.
 - All browser routes require that token, matching `X-Chronicle-Client`, and exact
   bootstrap Origin. Body client IDs must also match. Tokens cannot operate on
   another tab, MCP, or management endpoints.
@@ -152,7 +154,11 @@ in Chronicle. The legacy sessionless Node `/v1/call` route is not exposed.
 Authenticated agent-only `GET /health` returns service `chronicle`, version,
 protocol, number of agents/pending calls, and effective timing/origin config.
 `POST /shutdown` accepts `{ "force": false }`, returning 409 if sessions or calls
-are active. These endpoints do not extend daemon idle lifetime.
+are active. These endpoints do not extend daemon idle lifetime. Control/browser
+responses are buffered snapshots capped at 8 MiB and written outside registry
+locks with a five-second write deadline. This accommodates worst-case escaped
+metadata for all 64 connections. CLI health decoding uses the same bound. MCP SSE
+streams do not inherit that deadline.
 
 ## Validation
 

@@ -26,6 +26,10 @@ import (
 const Version = "0.2.0"
 const Protocol = 3
 const bodyLimit = 128 << 10
+
+// Bound registry memory and worst-case escaped inspection JSON together.
+const MaxConnections = 64
+const MaxControlResponseBytes = 8 << 20
 const browserLease = 10 * time.Second
 const maxRevision = 9007199254740991
 
@@ -500,7 +504,45 @@ func (d *Daemon) call(ctx context.Context, owner, name string, args json.RawMess
 	}
 }
 
-func (d *Daemon) Handler() http.Handler { return http.HandlerFunc(d.handle) }
+func (d *Daemon) Handler() http.Handler { return http.HandlerFunc(d.serveHTTP) }
+
+// Non-MCP responses are snapshots: never perform socket writes with mu held.
+// MCP owns its streaming response and must not inherit this write deadline.
+func (d *Daemon) serveHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/mcp" {
+		d.handle(w, r)
+		return
+	}
+	response := &bufferedResponse{header: make(http.Header), status: http.StatusOK}
+	d.handle(response, r)
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(5 * time.Second))
+	if response.overflow {
+		fail(w, http.StatusInternalServerError, "Response exceeds control response bound")
+		return
+	}
+	for key, values := range response.header {
+		w.Header()[key] = values
+	}
+	w.WriteHeader(response.status)
+	_, _ = w.Write(response.body.Bytes())
+}
+
+type bufferedResponse struct {
+	header   http.Header
+	status   int
+	body     bytes.Buffer
+	overflow bool
+}
+
+func (w *bufferedResponse) Header() http.Header    { return w.header }
+func (w *bufferedResponse) WriteHeader(status int) { w.status = status }
+func (w *bufferedResponse) Write(b []byte) (int, error) {
+	if w.overflow || w.body.Len()+len(b) > MaxControlResponseBytes {
+		w.overflow = true
+		return 0, errors.New("response exceeds bound")
+	}
+	return w.body.Write(b)
+}
 func (d *Daemon) handle(w http.ResponseWriter, r *http.Request) {
 	if r.Host != fmt.Sprintf("127.0.0.1:%d", d.Config.Port) {
 		fail(w, 403, "Invalid Host")
@@ -615,6 +657,10 @@ func (d *Daemon) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		if d.connections[data.ClientID] != nil {
 			fail(w, 409, "Connection ID already allocated; reconnect with a fresh ID")
+			return
+		}
+		if len(d.connections) >= MaxConnections {
+			fail(w, http.StatusServiceUnavailable, "Connection capacity reached (64); disconnect a tab or wait for unused bootstrap leases to expire")
 			return
 		}
 		c := &connection{id: data.ClientID, token: secret(), origin: origin, seen: d.now()}

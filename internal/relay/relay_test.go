@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"io"
 	"net"
@@ -914,5 +915,121 @@ func TestSingleTabNeverImplicitlySelected(t *testing.T) {
 	defer d.mu.Unlock()
 	if d.connections["only-tab"].owner != "" {
 		t.Fatal("inspection acquired browser")
+	}
+}
+
+type blockedWriter struct {
+	header   http.Header
+	started  chan struct{}
+	release  chan struct{}
+	deadline time.Time
+	once     sync.Once
+}
+
+func (w *blockedWriter) Header() http.Header                       { return w.header }
+func (w *blockedWriter) WriteHeader(int)                           {}
+func (w *blockedWriter) SetWriteDeadline(deadline time.Time) error { w.deadline = deadline; return nil }
+func (w *blockedWriter) Write(b []byte) (int, error) {
+	w.once.Do(func() { close(w.started) })
+	<-w.release
+	return len(b), nil
+}
+
+func TestSlowReaderDoesNotHoldRegistryLock(t *testing.T) {
+	d, s := setup(t)
+	var elapsed atomic.Int64
+	base := time.Now()
+	d.now = func() time.Time { return base.Add(time.Duration(elapsed.Load())) }
+	a := connect(t, s, "a", "edit")
+	b := connect(t, s, "b", "edit")
+	agent := client(t, d, s, nil)
+	selectTab(t, agent, a.id, true)
+	writer := &blockedWriter{header: make(http.Header), started: make(chan struct{}), release: make(chan struct{})}
+	req, _ := http.NewRequest("GET", s.URL+"/health", nil)
+	req.Header.Set("Authorization", "Bearer "+d.AgentToken)
+	done := make(chan struct{})
+	go func() { d.Handler().ServeHTTP(writer, req); close(done) }()
+	t.Cleanup(func() {
+		close(writer.release)
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("blocked writer did not finish")
+		}
+	})
+	select {
+	case <-writer.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("writer did not start")
+	}
+	if writer.deadline.IsZero() {
+		t.Fatal("non-MCP response lacks write deadline")
+	}
+	// Both independent tab work and ownership changes must run while one network
+	// writer remains blocked. The fake clock also proves housekeeping can acquire mu.
+	finished := make(chan error, 1)
+	go func() {
+		for _, route := range []struct {
+			tab  *tab
+			path string
+			body any
+		}{{b, "/v1/browser", b.hb}, {a, "/v1/browser/revoke", map[string]any{"expectedOwnershipRevision": 1}}} {
+			encoded, _ := json.Marshal(route.body)
+			r, _ := http.NewRequest("POST", s.URL+route.path, bytes.NewReader(encoded))
+			r.Header.Set("Authorization", "Bearer "+route.tab.token)
+			r.Header.Set("Origin", route.tab.origin)
+			r.Header.Set("X-Chronicle-Client", route.tab.id)
+			response, err := http.DefaultClient.Do(r)
+			if err != nil {
+				finished <- err
+				return
+			}
+			io.Copy(io.Discard, response.Body)
+			response.Body.Close()
+			if response.StatusCode != 200 {
+				finished <- fmt.Errorf("route returned %d", response.StatusCode)
+				return
+			}
+		}
+		elapsed.Store(int64(11 * time.Second))
+		d.mu.Lock()
+		d.expireLocked()
+		count := len(d.connections)
+		d.mu.Unlock()
+		if count != 0 {
+			finished <- fmt.Errorf("expiry retained %d connections", count)
+			return
+		}
+		finished <- nil
+	}()
+	select {
+	case err := <-finished:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("slow reader blocked registry operations")
+	}
+}
+
+func TestBootstrapCapacityIsBoundedAndExpires(t *testing.T) {
+	d, s := setup(t)
+	var elapsed atomic.Int64
+	base := time.Now()
+	d.now = func() time.Time { return base.Add(time.Duration(elapsed.Load())) }
+	for i := 0; i < MaxConnections; i++ {
+		code, _ := request(t, s, "", "", "POST", "/v1/connect", "http://localhost:4000", map[string]any{"protocol": Protocol, "clientId": fmt.Sprintf("id-%d", i)})
+		if code != 200 {
+			t.Fatalf("allocation %d returned %d", i, code)
+		}
+	}
+	code, _ := request(t, s, "", "", "POST", "/v1/connect", "http://localhost:4000", map[string]any{"protocol": Protocol, "clientId": "overflow"})
+	if code != 503 {
+		t.Fatalf("unbounded registry: %d", code)
+	}
+	elapsed.Store(int64(browserLease))
+	code, _ = request(t, s, "", "", "POST", "/v1/connect", "http://localhost:4000", map[string]any{"protocol": Protocol, "clientId": "after-expiry"})
+	if code != 200 {
+		t.Fatal("expired allocation retained capacity")
 	}
 }
