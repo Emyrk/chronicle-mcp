@@ -1,13 +1,9 @@
 {
   "mcpServers": {
     "chronicle-mcp": {
-      "command": "node",
-      "args": [
-        "${CLAUDE_PLUGIN_ROOT}/tools/cli.mjs",
-        "mcp",
-        "--root",
-        "${CLAUDE_PLUGIN_DATA}"
-      ]
+      "type": "http",
+      "url": "http://127.0.0.1:17643/mcp",
+      "headersHelper": "CLAUDE_PLUGIN_DATA=\"${CLAUDE_PLUGIN_DATA}\" sh \"${CLAUDE_PLUGIN_ROOT}/scripts/chronicle.sh\" headers"
     }
   }
 }

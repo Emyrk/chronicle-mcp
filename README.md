@@ -8,55 +8,62 @@
 
 ## Quick start
 
-Requires **Node.js 22+**, Claude Code (or another MCP-compatible client), and a Chronicle deployment with the browser-tool bridge. No build step or local Lua files required.
+The Claude plugin uses a shared, headless Go daemon over authenticated loopback
+HTTP MCP at `http://127.0.0.1:17643/mcp`. The plugin runtime does **not** require
+Node.js. The legacy standalone Node relay described below still requires Node.js
+22+ and `npm ci`; do not run it alongside the daemon on the same port.
 
-### 1. Install
+### 1. Load the Claude Code plugin
 
 ```sh
 git clone https://github.com/Emyrk/chronicle-mcp.git
-cd chronicle-mcp
-npm ci
-```
-
-### 2. Load the Claude Code plugin
-
-After installing the npm dependencies above, launch Claude Code from your working
-project (outside this plugin checkout), pointing it at the plugin:
-
-```sh
 cd /absolute/path/to/your/project
 claude --plugin-dir /absolute/path/chronicle-mcp
 ```
 
-In Claude Code, run `/chronicle:chronicle` to load the bootstrap skill and check
-`/mcp` for the relay connection. No marketplace is required for this local loading
-path. The plugin bundles only the MCP configuration and a thin bootstrap skill;
-page-specific prompts and skills are fetched live from Chronicle. It adds no
-hooks or agents.
+No marketplace is required. Use a Claude Code version supporting
+[plugin path variables](https://code.claude.com/docs/en/plugins-reference#environment-variables)
+and HTTP MCP `headersHelper`. The plugin bundles three thin skills, an explicit
+installer, and MCP configuration, with no hooks or agents. Loading it does not
+install or start anything automatically.
 
-**Local loading does not install dependencies automatically.** Run `npm ci` in the
-checkout you pass to `--plugin-dir` before loading it, and again when dependencies
-change. Node must be on Claude Code's PATH. A missing SDK/module error means the
-runtime dependencies are absent from that checkout; local plugin loading alone does
-not provision them. Current Claude Code can install dependencies for cached
-marketplace copies with a supported root lockfile (registry-only, locked versions,
-no lifecycle scripts, and a 60-second limit); see the
-[dependency installation rules](https://code.claude.com/docs/en/plugins/loading#node-js-package-dependencies).
-This repository does not configure a marketplace or add an installer hook.
+### 2. Set up the shared daemon
 
-The root `.mcp.json` uses Claude Code's `${CLAUDE_PLUGIN_ROOT}` for the relay
-script and `${CLAUDE_PLUGIN_DATA}` for private session state, independent of the
-project you open. Use a Claude Code version supporting these
-[plugin path variables](https://code.claude.com/docs/en/plugins-reference#environment-variables).
-Do not enable a second standalone Chronicle MCP entry alongside the plugin:
-only one process can own port 17643. Do not also run `npm run dev`. If you open
-this checkout itself, do not additionally approve its `.mcp.json` as a project MCP
-server; its path variables are intended for plugin loading.
+Run `/chronicle:setup` and approve the setup command. The installer downloads only
+the version pinned in `scripts/release.tsv`, verifies its bundled SHA256, and
+stores the executable in `${CLAUDE_PLUGIN_DATA}/bin/<version>/chronicle`. It checks
+the hash again before every invocation. A checksum fetched alongside an artifact
+is not trusted. Existing compatible services are reused by the CLI; setup never
+silently stops or upgrades a running daemon. Resolve an occupied port or version
+conflict explicitly rather than killing the listener.
 
-For another exact browser origin, append `"--origin", "http://localhost:5173"`
-(or your deployment's exact origin) to `args` in the checkout's `.mcp.json`, then
-restart Claude Code. Defaults allow `https://chronicleclassic.com` and
-`http://localhost:4000`.
+**Release status: unreleased.** No artifacts or checksums have been published or
+invented. Setup fails closed until maintainers ship reviewed release metadata.
+For local development, build the Go CLI and explicitly set `CHRONICLE_DEV_BINARY`
+to its absolute path in the environment used to launch Claude Code. This is an
+opt-in, unverified local executable, not an integrity-verified release install.
+
+The installer supports **Linux and macOS, amd64 and arm64**, using POSIX `sh`,
+`curl`, and `sha256sum` or `shasum`. Native Windows installation is not implemented;
+build/run the Go CLI manually and configure an HTTP MCP client with its
+`chronicle auth headers` command as headers helper. Do not run the POSIX plugin
+installer in a Windows environment and assume it installed a native binary.
+
+After setup reports status, reconnect the server in `/mcp` or restart Claude
+Code. Its headers helper reads credentials privately through the installed CLI;
+it does not install or start a service. Never paste tokens or private state into
+chat. The daemon's per-user state is independent of plugin binary storage. Run
+`/chronicle:chronicle` to load live browser context and skills.
+
+Use `/chronicle:teardown` for graceful shared shutdown. It checks status and asks
+for approval; active clients/work require an additional explicit confirmation
+before `stop --force`. Stopping affects every connected agent, not just this
+plugin. Uninstalling the plugin is not a daemon shutdown operation.
+
+Do not enable a second Chronicle MCP entry alongside the plugin, or start the
+legacy `npm run dev` listener on port 17643. When opening this checkout itself,
+do not also approve its `.mcp.json` as a project server: the headers helper uses
+plugin-specific path variables.
 
 ### Alternative: standalone MCP client (including Xum)
 
