@@ -574,6 +574,25 @@ func (d *Daemon) handle(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(204)
 		return
 	}
+	// Discovery is credential-free but retains the exact Host and approved-Origin
+	// guards above. It neither allocates a connection nor renews agent activity.
+	if r.URL.Path == "/healthz" {
+		w.Header().Set("Cache-Control", "no-store")
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", "GET, OPTIONS")
+			fail(w, http.StatusMethodNotAllowed, "Health probe requires GET")
+			return
+		}
+		d.mu.Lock()
+		closed := d.closed
+		d.mu.Unlock()
+		if closed {
+			fail(w, http.StatusServiceUnavailable, "Relay stopped")
+			return
+		}
+		respond(w, http.StatusOK, map[string]any{"service": "chronicle", "version": Version, "protocol": Protocol})
+		return
+	}
 	control := r.URL.Path == "/mcp" || r.URL.Path == "/health" || r.URL.Path == "/shutdown"
 	bootstrap := r.Method == "POST" && r.URL.Path == "/v1/connect"
 	if control {

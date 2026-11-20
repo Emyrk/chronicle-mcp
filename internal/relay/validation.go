@@ -21,7 +21,7 @@ func exactOrigin(s string) bool {
 var chronicleHost = regexp.MustCompile(`^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*chronicleclassic\.com$`)
 
 func (d *Daemon) allowed(s string) bool {
-	if s == "http://localhost:4000" || s == d.Config.Origin {
+	if s == "http://localhost:4000" || s == "http://localhost:5175" || s == d.Config.Origin {
 		return true
 	}
 	if !exactOrigin(s) {

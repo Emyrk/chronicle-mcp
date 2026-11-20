@@ -762,12 +762,12 @@ func TestPendingPinsAgentAndIdleButNotBrowserLease(t *testing.T) {
 
 func TestChronicleOrigins(t *testing.T) {
 	d, _ := setup(t)
-	for _, origin := range []string{"https://chronicleclassic.com", "https://octo.chronicleclassic.com", "https://a.b.chronicleclassic.com", "https://octo.chronicleclassic.com:443", "http://localhost:4000"} {
+	for _, origin := range []string{"https://chronicleclassic.com", "https://octo.chronicleclassic.com", "https://a.b.chronicleclassic.com", "https://octo.chronicleclassic.com:443", "http://localhost:4000", "http://localhost:5175"} {
 		if !d.allowed(origin) {
 			t.Fatal("approved origin rejected", origin)
 		}
 	}
-	for _, origin := range []string{"https://evilchronicleclassic.com", "https://chronicleclassic.com.evil.test", "http://octo.chronicleclassic.com", "https://octo.chronicleclassic.com:123", "https://chronicleclassic.com/", "https://*.chronicleclassic.com", "https://user@chronicleclassic.com"} {
+	for _, origin := range []string{"https://evilchronicleclassic.com", "https://chronicleclassic.com.evil.test", "http://octo.chronicleclassic.com", "https://octo.chronicleclassic.com:123", "https://chronicleclassic.com/", "https://*.chronicleclassic.com", "https://user@chronicleclassic.com", "http://localhost:5176", "http://localhost:5175.evil.test", "http://localhost:5175/", "https://localhost:5175"} {
 		if d.allowed(origin) {
 			t.Fatal("unsafe origin approved", origin)
 		}
@@ -1031,5 +1031,34 @@ func TestBootstrapCapacityIsBoundedAndExpires(t *testing.T) {
 	code, _ = request(t, s, "", "", "POST", "/v1/connect", "http://localhost:4000", map[string]any{"protocol": Protocol, "clientId": "after-expiry"})
 	if code != 200 {
 		t.Fatal("expired allocation retained capacity")
+	}
+}
+
+func TestDevelopmentConnectPreflight(t *testing.T) {
+	d, server := setup(t)
+	for _, path := range []string{"/v1/connect", "/healthz"} {
+		r := httptest.NewRequest("OPTIONS", server.URL+path, nil)
+		r.Header.Set("Origin", "http://localhost:5175")
+		r.Header.Set("Access-Control-Request-Method", "POST")
+		r.Header.Set("Access-Control-Request-Headers", "content-type")
+		r.Header.Set("Access-Control-Request-Private-Network", "true")
+		w := httptest.NewRecorder()
+		d.Handler().ServeHTTP(w, r)
+		if w.Code != 204 || w.Header().Get("Access-Control-Allow-Origin") != "http://localhost:5175" || w.Header().Get("Access-Control-Allow-Private-Network") != "true" {
+			t.Fatalf("preflight %s: %d %v", path, w.Code, w.Header())
+		}
+	}
+	code, result := request(t, server, "", "", "POST", "/v1/connect", "http://localhost:5175", map[string]any{"protocol": Protocol, "clientId": "vite"})
+	if code != 200 {
+		t.Fatalf("connect returned %d", code)
+	}
+	token, ok := result["token"].(string)
+	if !ok || len(token) != 64 {
+		t.Fatal("missing connection credential")
+	}
+	// Adding a browser origin must not make the dashboard cross-origin accessible.
+	code, _ = request(t, server, "", "", "GET", "/dashboard/api/status", "http://localhost:5175", nil)
+	if code != 403 {
+		t.Fatalf("dashboard returned %d", code)
 	}
 }

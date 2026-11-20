@@ -160,6 +160,9 @@ IDs, tool arguments, or results. Dashboard polling does not reset the six-hour
 agent-inactivity timeout. After shutdown or idle exit, start the daemon through
 the CLI or `/chronicle:setup`; a stopped daemon cannot serve its own dashboard.
 
+Frontend availability checks can use credential-free `GET /healthz` on the same
+`127.0.0.1` listener; see [frontend discovery](docs/daemon.md#frontend-discovery).
+
 ## Browser protocol compatibility
 
 Multi-tab selection uses **browser protocol 3** and requires the matching

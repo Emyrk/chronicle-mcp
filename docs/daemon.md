@@ -34,7 +34,7 @@ No release binaries are provided by this change.
 | `stop --force` | false | Explicitly disconnect active agents and cancel pending calls |
 
 The defaults allow HTTPS `chronicleclassic.com` and all its subdomains on the
-default HTTPS port, plus `http://localhost:4000`. Each allowed Origin is echoed
+default HTTPS port, plus `http://localhost:4000` and `http://localhost:5175`. Each allowed Origin is echoed
 exactly in CORS responses; page URLs must still match the requesting Origin.
 All these subdomains are trusted to bootstrap browser credentials. `--origin`
 adds one exact origin; wildcard flag values, paths, and trailing slashes are invalid.
@@ -159,6 +159,33 @@ responses are buffered snapshots capped at 8 MiB and written outside registry
 locks with a five-second write deadline. This accommodates worst-case escaped
 metadata for all 64 connections. CLI health decoding uses the same bound. MCP SSE
 streams do not inherit that deadline.
+
+## Frontend discovery
+
+`GET http://127.0.0.1:17643/healthz` is a credential-free liveness and
+compatibility probe. It returns only `{"service":"chronicle","version":"0.2.1","protocol":3}`
+with `Cache-Control: no-store`. Check the service and protocol, not just HTTP 200.
+It does not connect a tab, acquire ownership, or renew agent/daemon idle timers.
+The existing `/health` remains an authenticated management endpoint.
+
+The probe retains exact `127.0.0.1:<port>` Host validation (`localhost` is not an
+alias) and allows CORS only for approved Chronicle origins, including the exact
+configured `--origin`. Approved-origin OPTIONS preflights are supported. No
+Authorization or `X-Chronicle-Client` header is needed:
+
+```js
+const response = await fetch("http://127.0.0.1:17643/healthz", {
+  credentials: "omit",
+  signal: AbortSignal.timeout(2000),
+});
+if (!response.ok) throw new Error("Relay unavailable");
+const relay = await response.json();
+const compatible = relay.service === "chronicle" && relay.protocol === 3;
+```
+
+A failed browser fetch can also mean local-network permission or browser policy
+blocked access; it does not prove the daemon is not installed. This endpoint
+cannot start a stopped daemon. Browser bootstrap still requires explicit connect.
 
 ## Local dashboard
 

@@ -47,7 +47,7 @@ func dashboardJSON(t *testing.T, b []byte) map[string]any {
 func TestDashboardReadSecurity(t *testing.T) {
 	d, s := setup(t)
 	_ = d
-	for _, path := range []string{"/", "/dashboard/app.js", "/dashboard/style.css", "/dashboard/api/status"} {
+	for _, path := range []string{"/", "/dashboard/app.js", "/dashboard/style.css", "/dashboard/logo.svg", "/dashboard/inter-400.woff2", "/dashboard/inter-600.woff2", "/dashboard/Inter-LICENSE.txt", "/dashboard/api/status"} {
 		for _, headers := range []map[string]string{nil, {"Sec-Fetch-Site": "none", "Sec-Fetch-Mode": "navigate"}, {"Sec-Fetch-Site": "same-origin"}, {"Origin": s.URL, "Sec-Fetch-Site": "same-origin"}} {
 			code, h, b := dashboardRequest(t, s, "GET", path, nil, headers)
 			if code != 200 || len(b) == 0 {

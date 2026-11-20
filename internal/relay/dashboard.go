@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-//go:embed dashboard/index.html dashboard/app.js dashboard/style.css
+//go:embed dashboard/index.html dashboard/app.js dashboard/style.css dashboard/logo.svg dashboard/inter-*.woff2 dashboard/Inter-LICENSE.txt
 var dashboardAssets embed.FS
 
 func dashboardPath(path string) bool {
@@ -21,7 +21,7 @@ func dashboardPath(path string) bool {
 // origins. Never run it through the browser API's permissive bootstrap CORS.
 func (d *Daemon) dashboard(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("X-Frame-Options", "DENY")
@@ -49,7 +49,7 @@ func (d *Daemon) dashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodGet {
-		assets := map[string]struct{ file, contentType string }{"/": {"index.html", "text/html; charset=utf-8"}, "/dashboard/app.js": {"app.js", "text/javascript; charset=utf-8"}, "/dashboard/style.css": {"style.css", "text/css; charset=utf-8"}}
+		assets := map[string]struct{ file, contentType string }{"/": {"index.html", "text/html; charset=utf-8"}, "/dashboard/app.js": {"app.js", "text/javascript; charset=utf-8"}, "/dashboard/style.css": {"style.css", "text/css; charset=utf-8"}, "/dashboard/logo.svg": {"logo.svg", "image/svg+xml"}, "/dashboard/inter-400.woff2": {"inter-400.woff2", "font/woff2"}, "/dashboard/inter-600.woff2": {"inter-600.woff2", "font/woff2"}, "/dashboard/Inter-LICENSE.txt": {"Inter-LICENSE.txt", "text/plain; charset=utf-8"}}
 		if asset, ok := assets[r.URL.Path]; ok {
 			body, err := dashboardAssets.ReadFile("dashboard/" + asset.file)
 			if err != nil {
