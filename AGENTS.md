@@ -49,20 +49,21 @@ are missing, report their absence rather than inventing their output.
 - Check the continuation status and MCP `isError`, not just whether a response
   arrived. Rejected, canceled, stale, and failed calls are not successes.
 
-Local `main.lua`, `project.json`, and `lua-types/` are not the connected browser's
-working copy. Editing them does not edit the user's module through MCP.
+The browser working copy is authoritative. This repository has no local module
+editor or Lua starter; do not add filesystem-based module synchronization.
 
 ## Working on the relay
 
 - Read [README.md](README.md) and [docs/daemon.md](docs/daemon.md) for the Go
   daemon, CLI, exact-origin configuration, and protocol. Go 1.25+ builds it;
-  Node.js 22+ is only needed for legacy regression and installer tests.
+  Node.js 22+ is only needed for dependency-free dashboard, installer, and release tests.
+  The distributable plugin lives in `plugins/chronicle/`; the root marketplace
+  points there. Keep development files outside that plugin directory.
 - Start the shared service with `chronicle-mcp start` or foreground `chronicle-mcp serve`.
   Agents connect over authenticated HTTP at `http://127.0.0.1:17643/mcp`.
   `chronicle-mcp auth headers` is a private credential helper, not a chat command:
   never capture or display its output in reports.
-- Do not also start the legacy Node relay on the same port. Reuse only a verified
-  compatible daemon; report unrelated port conflicts and incompatible versions.
+- Reuse only a verified compatible daemon; report unrelated port conflicts and incompatible versions.
   Never silently kill or upgrade another service. Use ephemeral ports and
   temporary state directories in tests.
 - Keep daemon `dev.json` in its per-user state directory private, along with
@@ -75,9 +76,9 @@ working copy. Editing them does not edit the user's module through MCP.
 - Preserve dynamic discovery, page/session invalidation, cancellation, and
   browser-owned validation and approval. Do not add fixed tool catalogs or
   filesystem-based module synchronization to the relay.
-- Run `go test -race ./...`, `go vet ./...`, `npm test`, and `git diff --check`
+- Run `go test -race ./...`, `go vet ./...`, `node --test test/*.test.mjs`, and `git diff --check`
   after changes. Cover Go protocol/lifecycle changes in `internal/` tests;
-  retain legacy Node and installer coverage in `test/`. Do not publish fabricated
+  retain dashboard, installer, and release coverage in `test/`. Do not publish fabricated
   release artifacts or checksums: use an explicit local development binary until
   a real pinned release exists.
 

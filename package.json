@@ -1,9 +1,0 @@
-{
-  "name": "chronicle-module",
-  "version": "0.1.0",
-  "private": true,
-  "type": "module",
-  "engines": { "node": ">=22" },
-  "scripts": { "dev": "node tools/cli.mjs dev", "mcp": "node tools/cli.mjs mcp", "test": "node --test" },
-  "dependencies": { "@modelcontextprotocol/sdk": "^1.29.0", "fflate": "^0.8.2" }
-}

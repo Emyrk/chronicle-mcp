@@ -24,7 +24,7 @@ not trigger a weaker fallback. Do not share tokens in chat.
 ## Release procedure
 
 1. Merge the release changes into `main`, including passing CI. Set the daemon
-   `internal/relay.Version`, `.claude-plugin/plugin.json` version, and the
+   `internal/relay.Version`, `plugins/chronicle/.claude-plugin/plugin.json` version, and the
    installer's pinned release metadata consistently. Use a new stable version
    for each release; never reuse a published tag for different executable bytes.
 2. Create and push a `vX.Y.Z` tag at that reviewed commit. This is an explicit

@@ -10,8 +10,8 @@
 
 The Claude plugin uses a shared, headless Go daemon over authenticated loopback
 HTTP MCP at `http://127.0.0.1:17643/mcp`. The plugin runtime does **not** require
-Node.js. The old Node relay remains only as a compatibility reference; do not run it
-alongside the daemon on the same port.
+Node.js. The legacy Node relay and local Lua starter have been removed; the
+browser owns module source and execution.
 
 ### 1. Install the Claude Code plugin
 
@@ -30,7 +30,7 @@ For local development instead, clone the repository and load it directly:
 ```sh
 git clone https://github.com/Emyrk/chronicle-mcp.git
 cd /absolute/path/to/your/project
-claude --plugin-dir /absolute/path/chronicle-mcp
+claude --plugin-dir /absolute/path/chronicle-mcp/plugins/chronicle
 ```
 
 Use one installation method at a time to avoid loading duplicate Chronicle
@@ -55,7 +55,7 @@ Explicit local development builds do not require `gh`. Verification requires
 network access and a CLI supporting all required attestation policy flags.
 
 Run `/chronicle:setup` and approve the setup command. The installer downloads only
-the version pinned in `scripts/release.tsv`, verifies GitHub build provenance, and
+the version pinned in `plugins/chronicle/scripts/release.tsv`, verifies GitHub build provenance, and
 stores the executable in `${CLAUDE_PLUGIN_DATA}/bin/<version>/chronicle-mcp`. It checks
 provenance again before every invocation, pinning the repository, release workflow,
 exact source tag, and GitHub-hosted runners. A downloaded checksum alone is not trusted. Existing compatible services are reused by the CLI; setup never
@@ -90,9 +90,9 @@ upgrade and run setup. The new CLI cannot stop an incompatible old daemon. If
 already upgraded, use the retained old executable explicitly with the same state
 directory and user approval. There is no automatic upgrade engine.
 
-Do not enable a second Chronicle MCP entry alongside the plugin, or start the
-legacy `npm run dev` listener on port 17643. MCP configuration lives in
-`plugin.mcp.json`, explicitly referenced by the plugin manifest, so opening this
+Do not enable a second Chronicle MCP entry alongside the plugin or start a
+second listener on port 17643. MCP configuration lives in
+`plugins/chronicle/plugin.mcp.json`, explicitly referenced by the plugin manifest, so opening this
 checkout does not also register a project MCP server. If you previously enabled
 a separate project/user `chronicle-mcp` entry, disable it and use the plugin
 entry `plugin:chronicle:chronicle-mcp` instead.
@@ -205,7 +205,7 @@ and stale-operation guarantees.
 ## Marketplace updates
 
 The marketplace catalog is `.claude-plugin/marketplace.json`; the plugin version
-comes from `.claude-plugin/plugin.json`. Maintainers must bump the plugin version
+comes from `plugins/chronicle/.claude-plugin/plugin.json`. Maintainers must bump the plugin version
 to distribute changed files to cached marketplace installs. Pushing commits alone
 with the same version does not update those installs.
 
@@ -228,12 +228,27 @@ you may need the retained old CLI if the plugin has already changed. Never
 silently force shutdown or bypass release verification. See the
 [upgrade procedure](docs/releases.md#upgrades).
 
+## Plugin submission boundary
+
+The distributable plugin is **`plugins/chronicle/`**, not the repository root.
+Submit that subfolder when a directory accepts a repository plus plugin path.
+It contains the plugin manifest, skills, MCP configuration, installer, and MIT
+license; development sources, tests, package manifests, and lockfiles are outside
+it. The marketplace catalog at the repository root points to this folder.
+
+This packaging change does **not** remove Directory eligibility restrictions:
+the functional plugin still uses a loopback MCP endpoint, `headersHelper`, and
+an executable installer. The reported unverified-organization policy rejects
+these components. Normal plugin/marketplace validation is not approval for the
+Directory. Do not remove authentication or disguise executable files to bypass
+those checks. Icon, privacy-policy, and identifier requirements also remain.
+
 ## Release packaging
 
-`scripts/release.tsv` pins v0.2.1 and GitHub-attested raw executables for
+`plugins/chronicle/scripts/release.tsv` pins v0.2.1 and GitHub-attested raw executables for
 Linux/macOS amd64/arm64. The installer verifies provenance before execution,
 rejects unsafe paths, and stores binaries outside the replaceable plugin
-installation. See [release metadata and verification policy](scripts/README.md)
+installation. See [release metadata and verification policy](plugins/chronicle/scripts/README.md)
 and the [release publishing procedure](docs/releases.md).
 No hook or background auto-installer runs when loading the plugin.
 
@@ -242,18 +257,13 @@ No hook or background auto-installer runs when loading the plugin.
 ```sh
 go test -race ./...
 go vet ./...
-npm ci
-npm test
-sh -n scripts/chronicle.sh
+node --test test/*.test.mjs
+sh -n plugins/chronicle/scripts/chronicle.sh
 git diff --check
 ```
 
 Go tests exercise the real HTTP MCP client, browser protocol, ownership,
-cancellation, idle expiry, and detached CLI lifecycle. Node tests retain legacy
-protocol regression coverage and exercise the installer with local fixture
-artifacts; Node is a test dependency, not a Go daemon runtime dependency.
-
-The [legacy Node relay documentation](docs/legacy-node-relay.md), `tools/`, Lua
-starter, `project.json`, and `lua-types/` remain as references. They do not edit
-the connected browser's working copy. No tray UI is
-included yet.
+cancellation, idle expiry, and detached CLI lifecycle. Dependency-free Node 22+
+tests cover the dashboard, installer, and release build contract. No npm install
+is required. Node is a test dependency, not a daemon or plugin runtime dependency.
+No tray UI is included yet.

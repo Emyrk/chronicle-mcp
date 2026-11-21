@@ -21,14 +21,12 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
-          cache: npm
       - name: Use a canonical temporary directory
         # macOS /var is a symlink; private-state tests reject symlink ancestors.
         run: node -e 'const fs = require("node:fs"); fs.appendFileSync(process.env.GITHUB_ENV, "TMPDIR=" + fs.realpathSync(process.env.RUNNER_TEMP) + "\n");'
-      - run: npm ci
       - run: go test -race ./...
       - run: go vet ./...
-      - run: npm test
+      - run: node --test test/*.test.mjs
       - run: git diff --check
       - name: Cross-build release targets
         shell: bash

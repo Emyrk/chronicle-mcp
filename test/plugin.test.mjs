@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, mkdtemp, realpath, rm, access, mkdir, writeFile, copyFile, symlink } from 'node:fs/promises';
+import { readFile, readdir, mkdtemp, realpath, rm, access, mkdir, writeFile, copyFile, symlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,20 +11,34 @@ import { createHash } from 'node:crypto';
 const exec = promisify(execFile);
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-const read = file => readFile(new URL(`../${file}`, import.meta.url), 'utf8');
+const pluginRoot = path.join(root, 'plugins/chronicle');
+const read = file => readFile(path.join(pluginRoot, file), 'utf8');
 
-test('marketplace lists the root plugin with one authoritative version', async () => {
-  const marketplace = JSON.parse(await read('.claude-plugin/marketplace.json'));
+test('marketplace lists the isolated plugin with one authoritative version', async () => {
+  const marketplace = JSON.parse(await readFile(path.join(root, '.claude-plugin/marketplace.json'), 'utf8'));
   const manifest = JSON.parse(await read('.claude-plugin/plugin.json'));
   assert.equal(marketplace.name, 'chronicle-plugins');
   assert.equal(marketplace.owner.name, 'Emyrk');
   assert.equal(marketplace.plugins.length, 1);
   const entry = marketplace.plugins[0];
   assert.equal(entry.name, manifest.name);
-  assert.equal(entry.source, './');
+  assert.equal(entry.source, './plugins/chronicle');
+  assert.equal(manifest.license, 'MIT');
+  assert.equal(await read('LICENSE'), await readFile(path.join(root, 'LICENSE'), 'utf8'));
   assert.equal(entry.version, undefined);
   assert.ok(entry.description.length > 0);
   await access(path.join(root, entry.source, '.claude-plugin/plugin.json'));
+});
+
+test('plugin submission excludes repository development files and dependencies', async () => {
+  assert.deepEqual((await readdir(pluginRoot)).sort(), [
+    '.claude-plugin', 'LICENSE', 'README.md', 'plugin.mcp.json', 'scripts', 'skills',
+  ]);
+  assert.deepEqual((await readdir(path.join(pluginRoot, 'scripts'))).sort(), [
+    'README.md', 'chronicle.sh', 'release.tsv',
+  ]);
+  await assert.rejects(access(path.join(root, 'package.json')), { code: 'ENOENT' });
+  await assert.rejects(access(path.join(root, 'tools')), { code: 'ENOENT' });
 });
 
 test('plugin uses standard component locations and a thin discoverable skill', async () => {
@@ -34,7 +48,7 @@ test('plugin uses standard component locations and a thin discoverable skill', a
   // Skills use default discovery; MCP is explicit to avoid project registration.
   for (const key of ['skills', 'hooks', 'agents']) assert.equal(manifest[key], undefined);
   for (const dir of ['hooks', 'agents']) {
-    await assert.rejects(access(path.join(root, dir)), { code: 'ENOENT' });
+    await assert.rejects(access(path.join(pluginRoot, dir)), { code: 'ENOENT' });
   }
   const skill = await read('skills/chronicle/SKILL.md');
   assert.match(skill, /^---\nname: chronicle\ndescription: [^\n]+\n---\n/);
@@ -47,7 +61,7 @@ test('plugin uses standard component locations and a thin discoverable skill', a
 test('plugin uses authenticated HTTP with a side-effect-free headers helper', async () => {
   const manifest = JSON.parse(await read('.claude-plugin/plugin.json'));
   assert.equal(manifest.mcpServers, './plugin.mcp.json');
-  await assert.rejects(access(path.join(root, '.mcp.json')), { code: 'ENOENT' });
+  await assert.rejects(access(path.join(pluginRoot, '.mcp.json')), { code: 'ENOENT' });
   const config = JSON.parse(await read(manifest.mcpServers));
   assert.deepEqual(config, { mcpServers: { 'chronicle-mcp': {
     type: 'http', url: 'http://127.0.0.1:17643/mcp',
@@ -69,8 +83,8 @@ async function fixture(t) {
   const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), 'chronicle plugin ')));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const script = path.join(dir, 'chronicle.sh');
-  await copyFile(path.join(root, 'scripts/chronicle.sh'), script);
-  await copyFile(path.join(root, 'scripts/release.tsv'), path.join(dir, 'release.tsv'));
+  await copyFile(path.join(pluginRoot, 'scripts/chronicle.sh'), script);
+  await copyFile(path.join(pluginRoot, 'scripts/release.tsv'), path.join(dir, 'release.tsv'));
   const data = path.join(dir, 'plugin data');
   const env = { ...process.env, CLAUDE_PLUGIN_DATA: data, CHRONICLE_DEV_BINARY: '', CHRONICLE_TEST_ALLOW_HTTP: '' };
   const run = (args, extra = {}) => exec('sh', [script, ...args], { env: { ...env, ...extra }, timeout: 10000 });

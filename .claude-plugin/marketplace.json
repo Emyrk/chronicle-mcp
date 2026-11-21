@@ -7,7 +7,7 @@
   "plugins": [
     {
       "name": "chronicle",
-      "source": "./",
+      "source": "./plugins/chronicle",
       "description": "Connect Claude Code to Chronicle through a local MCP relay."
     }
   ]

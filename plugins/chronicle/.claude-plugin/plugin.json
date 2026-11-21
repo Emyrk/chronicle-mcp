@@ -3,6 +3,9 @@
   "version": "0.2.1",
   "mcpServers": "./plugin.mcp.json",
   "description": "Connect Claude Code to a Chronicle browser tab through the local MCP relay.",
-  "author": { "name": "Emyrk" },
-  "repository": "https://github.com/Emyrk/chronicle-mcp"
+  "author": {
+    "name": "Emyrk"
+  },
+  "repository": "https://github.com/Emyrk/chronicle-mcp",
+  "license": "MIT"
 }

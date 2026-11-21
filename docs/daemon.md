@@ -1,8 +1,7 @@
 # Go daemon
 
-The Go daemon replaces the per-client Node listener with one headless loopback
-service. Existing Node sources and tests remain as regression references. It
-implements browser protocol 3 as daemon version 0.2.0. It uses the official Go MCP SDK v1.8.0, verified against the module registry, and
+The Go daemon is the single headless loopback service; the legacy Node relay
+has been removed. It implements browser protocol 3. It uses the official Go MCP SDK v1.8.0, verified against the module registry, and
 requires Go 1.25 or newer to build:
 
 ```sh
@@ -211,8 +210,7 @@ Dashboard polling never extends agent leases or daemon idle lifetime.
 ```sh
 go test -race ./...
 go vet ./...
-npm ci
-npm test
+node --test test/*.test.mjs
 git diff --check
 ```
 

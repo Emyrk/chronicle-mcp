@@ -36,9 +36,9 @@ jobs:
           import fs from 'node:fs';
           const tag = process.env.RELEASE_TAG;
           if (!/^v\d+\.\d+\.\d+$/.test(tag)) throw new Error('Stable vX.Y.Z tag required');
-          const plugin = JSON.parse(fs.readFileSync('.claude-plugin/plugin.json', 'utf8'));
+          const plugin = JSON.parse(fs.readFileSync('plugins/chronicle/.claude-plugin/plugin.json', 'utf8'));
           if (tag !== `v${plugin.version}`) throw new Error('Tag must match plugin version');
-          const [pinned, method] = fs.readFileSync('scripts/release.tsv', 'utf8').trim().split(/\s+/);
+          const [pinned, method] = fs.readFileSync('plugins/chronicle/scripts/release.tsv', 'utf8').trim().split(/\s+/);
           if (pinned !== tag || method !== 'attested') throw new Error('Tag must match attested installer pin');
           JS
       - name: Build four platform executables
