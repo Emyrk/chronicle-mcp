@@ -22,7 +22,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const Version = "0.2.1"
+const Version = "0.2.3"
 const Protocol = 3
 const bodyLimit = 128 << 10
 

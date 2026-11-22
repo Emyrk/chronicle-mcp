@@ -45,7 +45,7 @@ not trigger a weaker fallback. Do not share tokens in chat.
 For a build-only check, run:
 
 ```sh
-sh scripts/build-release.sh v0.2.1 /path/to/temporary-output
+sh scripts/build-release.sh v0.2.3 /path/to/temporary-output
 ```
 
 Use the version matching the source. The build script does not publish or sign

@@ -164,7 +164,7 @@ streams do not inherit that deadline.
 ## Frontend discovery
 
 `GET http://127.0.0.1:17643/healthz` is a credential-free liveness and
-compatibility probe. It returns only `{"service":"chronicle","version":"0.2.1","protocol":3}`
+compatibility probe. It returns only `{"service":"chronicle","version":"0.2.3","protocol":3}`
 with `Cache-Control: no-store`. Check the service and protocol, not just HTTP 200.
 It does not connect a tab, acquire ownership, or renew agent/daemon idle timers.
 The existing `/health` remains an authenticated management endpoint.

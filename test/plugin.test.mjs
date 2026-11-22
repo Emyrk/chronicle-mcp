@@ -74,7 +74,7 @@ test('plugin uses authenticated HTTP with a side-effect-free headers helper', as
     assert.doesNotMatch(skill, /allowed-tools:/);
   }
   assert.match(await read('skills/teardown/SKILL.md'), /renewed explicit confirmation/);
-  assert.equal(await read('scripts/release.tsv'), 'v0.2.1 attested\n');
+  assert.equal(await read('scripts/release.tsv'), 'v0.2.3 attested\n');
 });
 
 async function fixture(t) {
@@ -194,14 +194,14 @@ cp "$ARTIFACT" "$2"
 printf '%s\\n' "$*" >> "$VERIFY_LOG"
 [ "$1 $2" = 'attestation verify' ] || exit 1
 file=$3; shift 3
-[ "$*" = '--repo Emyrk/chronicle-mcp --signer-workflow Emyrk/chronicle-mcp/.github/workflows/release.yml --source-ref refs/tags/v0.2.1 --deny-self-hosted-runners' ] || exit 1
+[ "$*" = '--repo Emyrk/chronicle-mcp --signer-workflow Emyrk/chronicle-mcp/.github/workflows/release.yml --source-ref refs/tags/v0.2.3 --deny-self-hosted-runners' ] || exit 1
 [ "\${VERIFY_FAIL:-0}" = 0 ] || exit 1
 cmp "$file" "$ARTIFACT" || exit 1
 echo 'verified'
 `, { mode: 0o700 });
   const env = { PATH: `${mocks}:${process.env.PATH}`, ARTIFACT: artifact, MARKER: marker,
     VERIFY_LOG: log, DOWNLOAD_LOG: path.join(f.dir, 'downloads') };
-  const binary = path.join(f.data, 'bin/v0.2.1/chronicle-mcp');
+  const binary = path.join(f.data, 'bin/v0.2.3/chronicle-mcp');
   await assert.rejects(f.run(['start'], { ...env, DOWNLOAD_FAIL: '1' }), /may not be published yet/);
   await assert.rejects(access(marker), { code: 'ENOENT' });
   await assert.rejects(f.run(['start'], { ...env, VERIFY_FAIL: '1' }), /attestation verification failed/);
@@ -209,7 +209,7 @@ echo 'verified'
   await assert.rejects(access(marker), { code: 'ENOENT' });
   assert.equal((await f.run(['start'], env)).stdout, 'start\n');
   const downloads = await readFile(env.DOWNLOAD_LOG, 'utf8');
-  assert.match(downloads, /https:\/\/github.com\/Emyrk\/chronicle-mcp\/releases\/download\/v0.2.1\/chronicle-mcp-(linux|darwin)-(amd64|arm64)/);
+  assert.match(downloads, /https:\/\/github.com\/Emyrk\/chronicle-mcp\/releases\/download\/v0.2.3\/chronicle-mcp-(linux|darwin)-(amd64|arm64)/);
   assert.equal((await f.run(['headers'], env)).stdout, 'auth\nheaders\n');
   const calls = await readFile(log, 'utf8');
   assert.ok(calls.includes(binary), 'cached binary must be reverified');
