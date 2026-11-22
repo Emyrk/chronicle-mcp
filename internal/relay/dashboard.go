@@ -38,7 +38,14 @@ func (d *Daemon) dashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sites, hasSite := r.Header["Sec-Fetch-Site"]
-	if hasSite && (len(sites) != 1 || (sites[0] != "same-origin" && sites[0] != "none")) {
+	// External links may open the inert dashboard shell, but not its APIs or
+	// assets. Keep embedded documents, fetches, and mutations same-origin only.
+	modes, destinations := r.Header.Values("Sec-Fetch-Mode"), r.Header.Values("Sec-Fetch-Dest")
+	topLevelNavigation := r.Method == http.MethodGet && r.URL.Path == "/" &&
+		len(modes) == 1 && modes[0] == "navigate" &&
+		len(destinations) == 1 && destinations[0] == "document"
+	if hasSite && (len(sites) != 1 || (sites[0] != "same-origin" && sites[0] != "none" &&
+		!((sites[0] == "cross-site" || sites[0] == "same-site") && topLevelNavigation))) {
 		fail(w, 403, "Cross-site dashboard access denied")
 		return
 	}

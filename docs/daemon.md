@@ -197,7 +197,9 @@ is local administration, not browser workshop execution; it never saves or
 modifies module source.
 
 Dashboard routes have their own same-origin policy, independent of Chronicle
-browser CORS. Remote/null Origins and cross-site Fetch Metadata are refused.
+browser CORS. Remote/null Origins and cross-site Fetch Metadata are refused,
+except top-level GET navigation to `/` so external links can open the dashboard.
+This exception does not allow embedded pages, assets, API reads, or mutations.
 Mutations require POST, exact loopback Origin, JSON, and a dashboard-specific
 header. These checks prevent cross-origin websites from invoking local controls;
 they do not restrict other local processes or local users. Do not expose the

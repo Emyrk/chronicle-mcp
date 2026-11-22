@@ -94,6 +94,42 @@ func TestDashboardReadSecurity(t *testing.T) {
 	}
 }
 
+func TestDashboardCrossSiteNavigation(t *testing.T) {
+	_, s := setup(t)
+	for _, site := range []string{"cross-site", "same-site"} {
+		for _, tc := range []struct {
+			name, method, path, mode, dest, origin string
+			want                                   int
+		}{
+			{"top-level", "GET", "/", "navigate", "document", "", 200},
+			{"fetch", "GET", "/", "cors", "empty", "", 403},
+			{"iframe", "GET", "/", "navigate", "iframe", "", 403},
+			{"missing-destination", "GET", "/", "navigate", "", "", 403},
+			{"missing-mode", "GET", "/", "", "document", "", 403},
+			{"status", "GET", "/dashboard/api/status", "navigate", "document", "", 403},
+			{"asset", "GET", "/dashboard/app.js", "navigate", "document", "", 403},
+			{"post", "POST", "/", "navigate", "document", "", 403},
+			{"revoke", "POST", "/dashboard/api/revoke", "navigate", "document", s.URL, 403},
+			{"shutdown", "POST", "/dashboard/api/shutdown", "navigate", "document", s.URL, 403},
+			{"remote-origin", "GET", "/", "navigate", "document", "https://octo.chronicleclassic.com", 403},
+		} {
+			t.Run(site+"/"+tc.name, func(t *testing.T) {
+				headers := map[string]string{"Sec-Fetch-Site": site, "Sec-Fetch-Mode": tc.mode, "Sec-Fetch-Dest": tc.dest}
+				if tc.origin != "" {
+					headers["Origin"] = tc.origin
+				}
+				code, h, _ := dashboardRequest(t, s, tc.method, tc.path, nil, headers)
+				if code != tc.want {
+					t.Fatalf("got %d, want %d", code, tc.want)
+				}
+				if h.Get("Access-Control-Allow-Origin") != "" || h.Get("X-Frame-Options") != "DENY" {
+					t.Fatal("navigation weakened CORS or framing protection")
+				}
+			})
+		}
+	}
+}
+
 func TestDashboardMutationSecurity(t *testing.T) {
 	d, s := setup(t)
 	tab := connect(t, s, "tab", "edit")
