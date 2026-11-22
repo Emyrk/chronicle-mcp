@@ -88,6 +88,6 @@ this bypasses release verification and must be described as such.
 Report errors, including an occupied port or incompatible running daemon. Never
 kill another process or automatically stop/upgrade a daemon. After successful
 status, ask the user to reconnect Chronicle in `/mcp` (or restart Claude Code),
-then use `/chronicle:chronicle` to fetch live page guidance. MCP authenticates
+then use `/chronicle:connect` to fetch live page guidance. MCP authenticates
 through its headers helper; never run `auth headers` in a visible tool transcript,
 print private state, or ask the user to paste tokens.

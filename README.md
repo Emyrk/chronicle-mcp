@@ -78,7 +78,7 @@ After setup reports status, reconnect the server in `/mcp` or restart Claude
 Code. Its headers helper reads credentials privately through the installed CLI;
 it does not install or start a service. Never paste tokens or private state into
 chat. The daemon's per-user state is independent of plugin binary storage. Run
-`/chronicle:chronicle` to load live browser context and skills.
+`/chronicle:connect` to load live browser context and skills.
 
 Use `/chronicle:teardown` for graceful shared shutdown. It checks status and asks
 for approval; active clients/work require an additional explicit confirmation
@@ -107,10 +107,10 @@ go build -o .build/chronicle-mcp ./cmd/chronicle-mcp
 export CHRONICLE_DEV_BINARY="$PWD/.build/chronicle-mcp"
 "$CHRONICLE_DEV_BINARY" start
 "$CHRONICLE_DEV_BINARY" status
-claude --plugin-dir "$PWD"
+claude --plugin-dir "$PWD/plugins/chronicle"
 ```
 
-Then run `/chronicle:chronicle`. The explicit development override is inherited
+Then run `/chronicle:connect`. The explicit development override is inherited
 by the plugin's setup and authentication helpers. To inspect startup errors,
 use `serve` in the foreground rather than `start`.
 
@@ -228,20 +228,24 @@ you may need the retained old CLI if the plugin has already changed. Never
 silently force shutdown or bypass release verification. See the
 [upgrade procedure](docs/releases.md#upgrades).
 
-## Plugin submission boundary
+## Distribution policy
+
+Chronicle is distributed through **our own GitHub-backed Claude Code marketplace**,
+`chronicle-plugins`. We are not pursuing an Anthropic Directory submission or
+claiming an official Anthropic marketplace listing. Install it using the
+[marketplace commands above](#1-install-the-claude-code-plugin).
+
+This distribution preserves the complete local integration: the loopback MCP
+endpoint, authenticated credential helper (`headersHelper`), and
+GitHub-attestation-verified executable installer. The Directory's reported
+unverified-organization restrictions exclude these components; we will not strip
+out authentication or disguise executable code to satisfy those restrictions.
 
 The distributable plugin is **`plugins/chronicle/`**, not the repository root.
-Submit that subfolder when a directory accepts a repository plus plugin path.
 It contains the plugin manifest, skills, MCP configuration, installer, and MIT
-license; development sources, tests, package manifests, and lockfiles are outside
-it. The marketplace catalog at the repository root points to this folder.
-
-This packaging change does **not** remove Directory eligibility restrictions:
-the functional plugin still uses a loopback MCP endpoint, `headersHelper`, and
-an executable installer. The reported unverified-organization policy rejects
-these components. Normal plugin/marketplace validation is not approval for the
-Directory. Do not remove authentication or disguise executable files to bypass
-those checks. Icon, privacy-policy, and identifier requirements also remain.
+license. Development sources and tests stay outside it, and the root marketplace
+catalog points to this folder. This separation keeps installs focused even
+though we are not submitting to the Directory.
 
 ## Release packaging
 

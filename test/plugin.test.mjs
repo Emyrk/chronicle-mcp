@@ -50,8 +50,8 @@ test('plugin uses standard component locations and a thin discoverable skill', a
   for (const dir of ['hooks', 'agents']) {
     await assert.rejects(access(path.join(pluginRoot, dir)), { code: 'ENOENT' });
   }
-  const skill = await read('skills/chronicle/SKILL.md');
-  assert.match(skill, /^---\nname: chronicle\ndescription: [^\n]+\n---\n/);
+  const skill = await read('skills/connect/SKILL.md');
+  assert.match(skill, /^---\nname: connect\ndescription: [^\n]+\n---\n/);
   for (const tool of ['whereami', 'list_connections', 'select_connection', 'release_connection', 'gen_page_context', 'list_skill', 'read_skill']) assert.ok(skill.includes(tool));
   assert.match(skill, /stale-state/);
   assert.match(skill, /live schemas/);

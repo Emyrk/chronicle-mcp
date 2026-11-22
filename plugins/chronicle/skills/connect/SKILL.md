@@ -1,9 +1,9 @@
 ---
-name: chronicle
+name: connect
 description: Connects to Chronicle and loads live browser guidance. Use when working with a Chronicle page or editing, checking, previewing, or saving a Chronicle Lua module through MCP.
 ---
 
-# Chronicle
+# Connect to Chronicle
 
 This is a bootstrap, not a local Lua editor. Chronicle supplies the current
 schemas, assistant prompt, and skills; the browser owns source and save approval.
