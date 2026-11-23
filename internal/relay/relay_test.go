@@ -585,12 +585,12 @@ func TestScopedAuthenticationAndValidation(t *testing.T) {
 			t.Fatal("reserved name accepted", name)
 		}
 	}
-	code, _ = a.req(t, s, "POST", "/v1/browser", strings.Repeat("x", bodyLimit))
+	code, _ = a.req(t, s, "POST", "/v1/browser", strings.Repeat("x", 256<<10))
 	if code != 413 {
 		t.Fatal("unbounded body")
 	}
 	h := heartbeat(a.id, "name", "edit")
-	h["result"] = map[string]any{"id": "id", "generation": "g1", "ownershipRevision": 0, "result": strings.Repeat("x", 64<<10)}
+	h["result"] = map[string]any{"id": "id", "generation": "g1", "ownershipRevision": 0, "result": strings.Repeat("x", 128<<10)}
 	code, _ = a.req(t, s, "POST", "/v1/browser", h)
 	if code != 413 {
 		t.Fatal("unbounded result")
@@ -600,6 +600,46 @@ func TestScopedAuthenticationAndValidation(t *testing.T) {
 		if code != 400 {
 			t.Fatal("invalid ownership revision", revision, code)
 		}
+	}
+}
+
+func TestBrowserResultSizeBoundary(t *testing.T) {
+	for _, size := range []int{64 << 10, 128 << 10, (128 << 10) + 1} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			d, s := setup(t)
+			b := connect(t, s, "a", "edit")
+			agent := client(t, d, s, nil)
+			selectTab(t, agent, b.id, true)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			ch := callAsync(agent, ctx, "edit")
+			cmd := pending(t, d, b.id)
+			// Measure the encoded JSON, including quotes and the continuation envelope.
+			prefix, suffix := `{"status":"success","result":"`, `"}`
+			raw := prefix + strings.Repeat("x", size-len(prefix)-len(suffix)) + suffix
+			b.hb["result"] = map[string]any{"id": cmd.ID, "generation": cmd.Generation, "ownershipRevision": cmd.OwnershipRevision, "result": json.RawMessage(raw)}
+			code, response := b.req(t, s, "POST", "/v1/browser", b.hb)
+			if size > 128<<10 {
+				if code != 413 || response["error"] != "Browser result exceeds 128 KiB" {
+					t.Fatalf("oversized result: %d %v", code, response)
+				}
+				// A rejected result must not consume the pending call or disconnect the tab.
+				b.hb["result"].(map[string]any)["result"] = json.RawMessage(`{"status":"success"}`)
+				response = b.beat(t, s)
+			} else if code != 200 {
+				t.Fatalf("bounded result rejected: %d %v", code, response)
+			}
+			if response["resultAccepted"] != true {
+				t.Fatal("result not accepted", response)
+			}
+			r := awaitResult(t, ch)
+			if r.IsError {
+				t.Fatal("result returned an MCP error")
+			}
+			if size <= 128<<10 && resultText(r) != raw {
+				t.Fatal("result changed in transit")
+			}
+		})
 	}
 }
 

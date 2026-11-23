@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -22,9 +23,13 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const Version = "0.2.3"
+const Version = "0.2.4"
 const Protocol = 3
 const bodyLimit = 128 << 10
+const resultLimit = 128 << 10
+
+// Heartbeats include page/tool metadata as well as the encoded result.
+const heartbeatBodyLimit = bodyLimit + resultLimit
 
 // Bound registry memory and worst-case escaped inspection JSON together.
 const MaxConnections = 64
@@ -639,11 +644,12 @@ func (d *Daemon) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	// Buffer outside the mutex, with transport deadline and size cap.
 	if r.Method == http.MethodPost {
-		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, bodyLimit))
+		limit := requestBodyLimit(r)
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 		if err != nil {
 			var large *http.MaxBytesError
 			if errors.As(err, &large) {
-				fail(w, 413, "Request body must not exceed 128 KiB")
+				fail(w, 413, fmt.Sprintf("Request body must not exceed %d KiB", limit>>10))
 			} else {
 				fail(w, 400, "Unable to read body")
 			}
@@ -826,8 +832,8 @@ func (d *Daemon) heartbeatLocked(w http.ResponseWriter, r *http.Request, c *conn
 			fail(w, 400, "Invalid browser result or ownershipRevision")
 			return
 		}
-		if len(data.Result.Result) > 64<<10 {
-			fail(w, 413, "Browser result exceeds 64 KiB")
+		if len(data.Result.Result) > resultLimit {
+			fail(w, 413, "Browser result exceeds 128 KiB")
 			return
 		}
 	}

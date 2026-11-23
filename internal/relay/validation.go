@@ -47,13 +47,21 @@ func respond(w http.ResponseWriter, status int, v any) {
 func fail(w http.ResponseWriter, status int, s string) {
 	respond(w, status, map[string]any{"error": s})
 }
+func requestBodyLimit(r *http.Request) int64 {
+	if r.Method == http.MethodPost && r.URL.Path == "/v1/browser" {
+		return heartbeatBodyLimit
+	}
+	return bodyLimit
+}
+
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {
-	r.Body = http.MaxBytesReader(w, r.Body, bodyLimit)
+	limit := requestBodyLimit(r)
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	dec := json.NewDecoder(r.Body)
 	if err := dec.Decode(v); err != nil {
 		var large *http.MaxBytesError
 		if errors.As(err, &large) {
-			fail(w, 413, "Request body must not exceed 128 KiB")
+			fail(w, 413, fmt.Sprintf("Request body must not exceed %d KiB", limit>>10))
 		} else {
 			fail(w, 400, "Invalid JSON")
 		}

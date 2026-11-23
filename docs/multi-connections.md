@@ -104,7 +104,11 @@ Keep the current payload plus the required display name:
 points, and rendered as text. Duplicate names are allowed; IDs disambiguate them.
 The frontend supplies a useful default from the module/page context. Rename via
 the next heartbeat; renaming does not release ownership or invalidate a page.
-Existing schema, capability, body/result-size, and continuation rules remain.
+Requests are limited to 128 KiB, except `POST /v1/browser` heartbeats, which
+allow 256 KiB to accommodate page/tool metadata alongside a result. The result
+itself is limited to 128 KiB of encoded JSON, including its continuation envelope.
+Oversized requests or results return HTTP 413 without consuming the pending call.
+Existing schema, capability, and continuation rules remain.
 
 Response:
 

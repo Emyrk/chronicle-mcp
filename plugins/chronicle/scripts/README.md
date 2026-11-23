@@ -4,9 +4,9 @@
 artifacts, not archives (no extraction or archive path traversal). Native Windows
 installation is intentionally unsupported; use the Go CLI manually.
 
-`release.tsv` pins `v0.2.3 attested`, not a mutable latest release. This selects
+`release.tsv` pins `v0.2.4 attested`, not a mutable latest release. This selects
 raw assets named `chronicle-mcp-<os>-<arch>` from
-`https://github.com/Emyrk/chronicle-mcp/releases/download/v0.2.3/` for
+`https://github.com/Emyrk/chronicle-mcp/releases/download/v0.2.4/` for
 `linux-amd64`, `linux-arm64`, `darwin-amd64`, and `darwin-arm64`.
 The pin is not evidence that the release exists: downloads fail closed until the
 tag's release workflow publishes the artifacts and their attestations.
@@ -15,7 +15,7 @@ Before execution, `gh attestation verify` authenticates the artifact against:
 
 - `--repo Emyrk/chronicle-mcp`
 - `--signer-workflow Emyrk/chronicle-mcp/.github/workflows/release.yml`
-- `--source-ref refs/tags/v0.2.3` (derived from the pinned version)
+- `--source-ref refs/tags/v0.2.4` (derived from the pinned version)
 - `--deny-self-hosted-runners`
 
 The release workflow uses `actions/attest-build-provenance` on raw executables

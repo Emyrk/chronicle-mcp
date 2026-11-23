@@ -146,7 +146,11 @@ stopping them. Explicitly stop/upgrade an old daemon with its matching CLI.
 - `POST /v1/browser/disconnect` removes only that tab and invalidates its token.
   Reconnect with a fresh client ID; ownership is never restored automatically.
 
-The 128-KiB request and 64-KiB result bounds, exact Origin/Host validation,
+Requests are bounded to 128 KiB, except browser heartbeats (`POST /v1/browser`),
+which allow 256 KiB for a result plus page/tool metadata. Browser results are
+bounded to 128 KiB of encoded JSON, including the continuation envelope.
+Oversized requests or results return HTTP 413 without consuming the pending call.
+Exact Origin/Host validation,
 private-network preflights, capability pinning, and late-result rules remain.
 Unknown or stale results return `resultAccepted:false` without unpairing a healthy
 tab. Browser validation, previews, mutations, and save approval remain entirely
@@ -164,7 +168,7 @@ streams do not inherit that deadline.
 ## Frontend discovery
 
 `GET http://127.0.0.1:17643/healthz` is a credential-free liveness and
-compatibility probe. It returns only `{"service":"chronicle","version":"0.2.3","protocol":3}`
+compatibility probe. It returns only `{"service":"chronicle","version":"0.2.4","protocol":3}`
 with `Cache-Control: no-store`. Check the service and protocol, not just HTTP 200.
 It does not connect a tab, acquire ownership, or renew agent/daemon idle timers.
 The existing `/health` remains an authenticated management endpoint.
